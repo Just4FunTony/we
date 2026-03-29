@@ -108,7 +108,7 @@ function WeData.saveSlot(index)
         local item = items:get(i)
         table.insert(slot.inventory, {
             fullType  = item:getFullType(),
-            condition = item:getCondition and item:getCondition() or 100,
+            condition = item.getCondition and item:getCondition() or 100,
             uses      = item.getUsedDelta and item:getUsedDelta() or 0,
         })
     end
@@ -223,7 +223,7 @@ function WeData.switchTo(index)
         local player = getPlayer()
         if player then
             local msg = getText("UI_We_Switch_" .. reason)
-            HaloTextHelper.addTextWithArrow(player, msg, HaloTextHelper.getColorRed())
+            HaloTextHelper.addBadText(player, msg)
         end
         return
     end
@@ -263,11 +263,7 @@ function WeData.switchTo(index)
 
     -- 6. Feedback text
     if player then
-        HaloTextHelper.addTextWithArrow(
-            player,
-            getText("UI_We_SwitchedTo") .. data.slots[index].name,
-            HaloTextHelper.getColorGreen()
-        )
+        HaloTextHelper.addGoodText(player, getText("UI_We_SwitchedTo") .. data.slots[index].name)
     end
 end
 

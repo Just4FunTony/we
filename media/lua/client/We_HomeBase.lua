@@ -20,11 +20,7 @@ local function onFillWorldObjectContextMenu(playerNum, context, worldObjects, te
         nil,
         function()
             WeData.setHome(activeSlot, sx, sy, sz)
-            HaloTextHelper.addTextWithArrow(
-                player,
-                getText("UI_We_HomeSet"),
-                HaloTextHelper.getColorGreen()
-            )
+            HaloTextHelper.addGoodText(player, getText("UI_We_HomeSet"))
         end
     )
 end
