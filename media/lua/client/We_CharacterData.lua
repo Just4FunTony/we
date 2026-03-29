@@ -108,8 +108,8 @@ function WeData.saveSlot(index)
         local item = items:get(i)
         table.insert(slot.inventory, {
             fullType  = item:getFullType(),
-            condition = item:getCondition(),
-            uses      = item:getUsedDelta(),
+            condition = item:getCondition and item:getCondition() or 100,
+            uses      = item.getUsedDelta and item:getUsedDelta() or 0,
         })
     end
 
@@ -165,8 +165,8 @@ function WeData.loadSlot(index)
     for _, itemData in ipairs(slot.inventory) do
         local item = instanceItem(itemData.fullType)
         if item then
-            item:setCondition(itemData.condition)
-            item:setUsedDelta(itemData.uses)
+            if item.setCondition then item:setCondition(itemData.condition) end
+            if item.setUsedDelta then item:setUsedDelta(itemData.uses) end
             player:getInventory():AddItem(item)
         end
     end
