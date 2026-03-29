@@ -10,15 +10,16 @@ set -euo pipefail
 
 MOD_ID="We"
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
-MODS_DIR="$HOME/Zomboid/mods"
-DEST_DIR="$MODS_DIR/$MOD_ID"
+MODS_DIR="$HOME/Zomboid/Workshop"
+DEST_DIR="$MODS_DIR/$MOD_ID/Contents/mods/$MOD_ID/42"
+ROOT_DIR="$MODS_DIR/$MOD_ID"
 PZ_BIN="$HOME/.local/share/Steam/steamapps/common/ProjectZomboid/projectzomboid/ProjectZomboid64"
 
 # ── --clean ──────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--clean" ]]; then
-    if [[ -d "$DEST_DIR" ]]; then
-        rm -rf "$DEST_DIR"
-        echo "[We] Мод удалён: $DEST_DIR"
+    if [[ -d "$MODS_DIR/$MOD_ID" ]]; then
+        rm -rf "$MODS_DIR/$MOD_ID"
+        echo "[We] Мод удалён: $MODS_DIR/$MOD_ID"
     else
         echo "[We] Мод не установлен."
     fi
@@ -31,6 +32,8 @@ echo "  Источник : $SRC_DIR"
 echo "  Назначение: $DEST_DIR"
 echo ""
 
+mkdir -p "$DEST_DIR"
+
 rsync -av --delete \
     --include="mod.info" \
     --include="poster.png" \
@@ -38,6 +41,11 @@ rsync -av --delete \
     --include="media/**" \
     --exclude="*" \
     "$SRC_DIR/" "$DEST_DIR/"
+
+# preview.png и workshop.txt — в корне Workshop/We/
+for f in preview.png workshop.txt; do
+    [[ -f "$SRC_DIR/$f" ]] && cp "$SRC_DIR/$f" "$ROOT_DIR/$f"
+done
 
 echo ""
 echo "[We] Готово. Файлы скопированы в $DEST_DIR"

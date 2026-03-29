@@ -1,4 +1,5 @@
-name=We
-id=We
+version=1
+title=We
 description=Multi-character system: switch between survivors who live as NPCs at home base.
-poster=poster.png
+tags=
+visibility=private
