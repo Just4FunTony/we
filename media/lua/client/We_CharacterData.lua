@@ -95,7 +95,10 @@ function WeData.saveSlot(index)
 
     -- Stats
     for _, key in ipairs(We.STATS_KEYS) do
-        slot.stats[key] = stats["get" .. key](stats)
+        local getter = stats["get" .. key]
+        if getter then
+            slot.stats[key] = getter(stats)
+        end
     end
 
     -- Inventory
@@ -145,8 +148,9 @@ function WeData.loadSlot(index)
 
     -- Stats
     for _, key in ipairs(We.STATS_KEYS) do
-        if slot.stats[key] then
-            stats["set" .. key](stats, slot.stats[key])
+        local setter = stats["set" .. key]
+        if setter and slot.stats[key] then
+            setter(stats, slot.stats[key])
         end
     end
 
