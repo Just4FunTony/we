@@ -4,7 +4,6 @@ We = We or {}
 We.Version      = "2.0"
 We.MAX_SLOTS    = 4
 We.MOD_DATA_KEY = "We_Characters"
-We.HOTKEY             = Keyboard.KEY_F6   -- open/close the character panel
 We.HOME_SWITCH_RADIUS = 8            -- max tiles from home base to allow switching
 
 -- Stat keys used for save/load; each maps to stats:get<Key>() / stats:set<Key>()
@@ -36,6 +35,9 @@ function We.defaultSlot(index)
             beardColor  = nil,   -- {r, g, b}
             clothing    = {},    -- bodyLocation -> itemFullType
         },
+
+        -- Rolled character loadout (set on first use, nil until then)
+        creation = nil,  -- {profession, positive={...}, negative={...}}
 
         -- Persistent outfit ID of the NPC zombie representing this character.
         -- nil when the character is active (being played by the player).

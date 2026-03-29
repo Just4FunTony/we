@@ -19,6 +19,10 @@ UI_EN = {
     UI_We_Switch_tooFar  = "You must be at your home base to switch!",
 
     -- NPC status in panel
+    -- Character creation
+    UI_We_NewChar_Title  = "New Character",
+
+    -- NPC status
     UI_We_NPC_AtHome     = "[ NPC: at home base ]",
     UI_We_NPC_Unspawned  = "[ NPC: not yet spawned ]",
 
@@ -26,4 +30,8 @@ UI_EN = {
     UI_We_BaseMenu_Title    = "Base",
     UI_We_BaseMenu_SwitchTo = "Switch to: %1",
     UI_We_BaseMenu_StartAs  = "Start playing as: %1",
+
+    -- Faction tab panel tabs
+    UI_We_Tab_Faction       = "Faction",
+    UI_We_Tab_Characters    = "Characters",
 }

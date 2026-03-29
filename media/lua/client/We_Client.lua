@@ -1,16 +1,9 @@
--- We: Client entry point — initialisation, key binding, NPC startup.
+-- We: Client entry point — initialisation and NPC startup.
 
 local function onGameStart()
     WeData.init()
     WeNPC.init()
-    print("[We] Client ready. Press " .. tostring(We.HOTKEY) .. " to open the character panel.")
-end
-
-local function onKeyPressed(key)
-    if key == We.HOTKEY then
-        WePanel.toggle()
-    end
+    print("[We] Client ready. Use the Faction button to open the character panel.")
 end
 
 Events.OnGameStart.Add(onGameStart)
-Events.OnKeyPressed.Add(onKeyPressed)

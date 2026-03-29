@@ -19,6 +19,10 @@ UI_RU = {
     UI_We_Switch_tooFar  = "Для переключения нужно быть на базе!",
 
     -- Статус NPC в панели
+    -- Создание персонажа
+    UI_We_NewChar_Title  = "Новый персонаж",
+
+    -- Статус NPC
     UI_We_NPC_AtHome     = "[ NPC: на базе ]",
     UI_We_NPC_Unspawned  = "[ NPC: ещё не заспавнен ]",
 
@@ -26,4 +30,8 @@ UI_RU = {
     UI_We_BaseMenu_Title    = "База",
     UI_We_BaseMenu_SwitchTo = "Играть за: %1",
     UI_We_BaseMenu_StartAs  = "Начать играть за: %1",
+
+    -- Вкладки в панели фракции
+    UI_We_Tab_Faction       = "Фракция",
+    UI_We_Tab_Characters    = "Персонажи",
 }

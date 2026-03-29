@@ -242,16 +242,22 @@ function WeData.switchTo(index)
     -- 4. Activate the new slot
     data.activeSlot = index
 
-    -- 5. Load the target character (or snapshot an empty one)
+    -- 5. Load the target character or initialise a brand-new one
+    local player = getPlayer()
     if data.slots[index].x == nil then
-        WeData.saveSlot(index)
-        print("[We] Switched to new slot " .. index)
+        -- First time in this slot: randomize profession + traits, then snapshot
+        if player then
+            local summary = WeCharCreate.randomize(player)
+            data.slots[index].creation = summary
+            WeData.saveSlot(index)
+            WeCharCreate.showPopup(summary)
+        end
+        print("[We] New character created for slot " .. index)
     else
         WeData.loadSlot(index)
     end
 
     -- 6. Feedback text
-    local player = getPlayer()
     if player then
         HaloTextHelper.addTextWithArrow(
             player,
