@@ -1,11 +1,11 @@
 -- We: Character data manager (client-side)
--- Handles saving, loading, and switching between character slots.
+-- Handles saving, loading, appearance capture, and character switching.
 
 WeData = WeData or {}
 
-local modDataRef = nil   -- direct reference into getGameTime():getModData()
+local modDataRef = nil   -- cached reference into getGameTime():getModData()
 
--- ─── Internal helpers ───────────────────────────────────────────────────────
+-- ─── Internal helpers ──────────────────────────────────────────────────────────
 
 local function getPlayer()
     return getSpecificPlayer(0)
@@ -27,18 +27,34 @@ local function ensureModData()
     return modDataRef
 end
 
--- ─── Public API ─────────────────────────────────────────────────────────────
+-- ─── Public API ────────────────────────────────────────────────────────────────
 
 function WeData.init()
-    modDataRef = nil  -- force re-fetch on game load
+    modDataRef = nil   -- force re-fetch on game load
     local data = ensureModData()
-    -- Fill in any missing slots (e.g. after MAX_SLOTS was increased)
     for i = 1, We.MAX_SLOTS do
         if not data.slots[i] then
             data.slots[i] = We.defaultSlot(i)
+        else
+            -- Back-fill fields added in v2
+            if not data.slots[i].appearance then
+                data.slots[i].appearance = We.defaultSlot(i).appearance
+            end
+            if data.slots[i].homeX == nil then
+                data.slots[i].homeX = nil
+                data.slots[i].homeY = nil
+                data.slots[i].homeZ = nil
+            end
+            if data.slots[i].npcId == nil then
+                data.slots[i].npcId = nil
+            end
         end
     end
     print("[We] CharacterData initialised. Active slot: " .. data.activeSlot)
+end
+
+function WeData.getData()
+    return ensureModData()
 end
 
 function WeData.getActiveSlot()
@@ -53,7 +69,16 @@ function WeData.renameSlot(index, name)
     ensureModData().slots[index].name = name
 end
 
--- Save the current player state into the given slot.
+function WeData.setHome(slotIndex, x, y, z)
+    local slot  = ensureModData().slots[slotIndex]
+    slot.homeX  = x
+    slot.homeY  = y
+    slot.homeZ  = z
+    print("[We] Home set for slot " .. slotIndex .. " → " .. x .. "," .. y .. "," .. z)
+end
+
+-- ─── Save slot ────────────────────────────────────────────────────────────────
+
 function WeData.saveSlot(index)
     local player = getPlayer()
     if not player then return end
@@ -97,10 +122,14 @@ function WeData.saveSlot(index)
         }
     end
 
+    -- Appearance (for NPC dressing)
+    slot.appearance = WeNPC.captureAppearance(player)
+
     print("[We] Slot " .. index .. " saved.")
 end
 
--- Restore player state from the given slot.
+-- ─── Load slot ────────────────────────────────────────────────────────────────
+
 function WeData.loadSlot(index)
     local player = getPlayer()
     if not player then return end
@@ -121,17 +150,16 @@ function WeData.loadSlot(index)
         end
     end
 
-    -- Position (find nearest safe tile to avoid spawning inside walls)
-    local safeX, safeY, safeZ = slot.x, slot.y, slot.z
-    player:setX(safeX)
-    player:setY(safeY)
-    player:setZ(safeZ)
+    -- Position
+    player:setX(slot.x)
+    player:setY(slot.y)
+    player:setZ(slot.z)
     player:resetMoveSpeed()
 
     -- Inventory
     player:getInventory():clear()
     for _, itemData in ipairs(slot.inventory) do
-        local item = InventoryItemFactory.CreateItem(itemData.fullType)
+        local item = instanceItem(itemData.fullType)
         if item then
             item:setCondition(itemData.condition)
             item:setUsedDelta(itemData.uses)
@@ -142,46 +170,102 @@ function WeData.loadSlot(index)
     -- Skills
     local perks = Perks.getList()
     for i = 0, perks:size() - 1 do
-        local perk    = perks:get(i)
-        local key     = tostring(perk)
-        local saved   = slot.skills[key]
+        local perk  = perks:get(i)
+        local key   = tostring(perk)
+        local saved = slot.skills[key]
         if saved then
             xpSys:setCurrentLevel(perk, saved.level)
             local delta = saved.xp - xpSys:getXP(perk)
-            if delta > 0 then
-                xpSys:AddXP(perk, delta)
-            end
+            if delta > 0 then xpSys:AddXP(perk, delta) end
         end
     end
 
     print("[We] Slot " .. index .. " loaded.")
 end
 
--- Save current slot, then load the target slot.
+-- ─── Base proximity check ────────────────────────────────────────────────────
+
+-- Returns true if the player is within We.HOME_SWITCH_RADIUS of their home base.
+-- Also returns a status string for UI feedback.
+function WeData.isAtHomeBase()
+    local player = getPlayer()
+    if not player then return false, "noPlayer" end
+
+    local slot = ensureModData().slots[ensureModData().activeSlot]
+    if not slot.homeX then
+        return false, "noHome"
+    end
+
+    local dx   = player:getX() - slot.homeX
+    local dy   = player:getY() - slot.homeY
+    local dist = math.sqrt(dx * dx + dy * dy)
+
+    if dist > We.HOME_SWITCH_RADIUS then
+        return false, "tooFar"
+    end
+
+    return true, "ok"
+end
+
+-- ─── Switch ───────────────────────────────────────────────────────────────────
+
 function WeData.switchTo(index)
     local data = ensureModData()
     if index == data.activeSlot then return end
+
+    -- Must be at home base to switch characters
+    local ok, reason = WeData.isAtHomeBase()
+    if not ok then
+        local player = getPlayer()
+        if player then
+            local msg = getText("UI_We_Switch_" .. reason)
+            HaloTextHelper.addTextWithArrow(player, msg, HaloTextHelper.getColorRed())
+        end
+        return
+    end
+
+    local prev = data.activeSlot
+
+    -- 1. Save the character we are leaving (captures appearance too)
+    WeData.saveSlot(prev)
+
+    -- 2. Despawn the NPC for the slot we are switching INTO (we are taking over)
+    if data.slots[index].npcId then
+        WeNPC.despawnForSlot(index)
+    end
+
+    -- 3. Spawn an NPC for the character we are leaving
+    if data.slots[prev].x ~= nil then
+        WeNPC.spawnForSlot(prev)
+    end
+
+    -- 4. Activate the new slot
+    data.activeSlot = index
+
+    -- 5. Load the target character (or snapshot an empty one)
     if data.slots[index].x == nil then
-        -- First time visiting this slot: just move there without restoring
-        WeData.saveSlot(data.activeSlot)
-        data.activeSlot = index
-        -- Save an initial snapshot so the slot is no longer "empty"
         WeData.saveSlot(index)
         print("[We] Switched to new slot " .. index)
     else
-        WeData.saveSlot(data.activeSlot)
-        data.activeSlot = index
         WeData.loadSlot(index)
     end
-    -- Feedback text above the player
+
+    -- 6. Feedback text
     local player = getPlayer()
     if player then
-        HaloTextHelper.addTextWithArrow(player, getText("UI_We_SwitchedTo") .. data.slots[index].name, HaloTextHelper.getColorGreen())
+        HaloTextHelper.addTextWithArrow(
+            player,
+            getText("UI_We_SwitchedTo") .. data.slots[index].name,
+            HaloTextHelper.getColorGreen()
+        )
     end
 end
 
--- Ensure the active slot is saved before the game writes to disk.
+-- ─── Auto-save on game write ──────────────────────────────────────────────────
+
 local function onSave()
-    WeData.saveSlot(ensureModData().activeSlot)
+    local data = ensureModData()
+    WeData.saveSlot(data.activeSlot)
 end
+
 Events.OnSave.Add(onSave)

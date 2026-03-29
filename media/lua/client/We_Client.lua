@@ -1,7 +1,8 @@
--- We: Client entry point — initialisation and key binding
+-- We: Client entry point — initialisation, key binding, NPC startup.
 
 local function onGameStart()
     WeData.init()
+    WeNPC.init()
     print("[We] Client ready. Press " .. tostring(We.HOTKEY) .. " to open the character panel.")
 end
 

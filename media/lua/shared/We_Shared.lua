@@ -1,10 +1,11 @@
 -- We: Shared constants and data schema (loaded on client and server)
 
 We = We or {}
-We.Version    = "1.0"
-We.MAX_SLOTS  = 4
+We.Version      = "2.0"
+We.MAX_SLOTS    = 4
 We.MOD_DATA_KEY = "We_Characters"
-We.HOTKEY     = Keyboard.KEY_F6   -- open/close the character panel
+We.HOTKEY             = Keyboard.KEY_F6   -- open/close the character panel
+We.HOME_SWITCH_RADIUS = 8            -- max tiles from home base to allow switching
 
 -- Stat keys used for save/load; each maps to stats:get<Key>() / stats:set<Key>()
 We.STATS_KEYS = {
@@ -20,6 +21,25 @@ function We.defaultSlot(index)
         stats     = {},
         inventory = {},
         skills    = {},
+
+        -- Home base position (set via right-click context menu)
+        homeX = nil, homeY = nil, homeZ = nil,
+
+        -- Appearance snapshot captured when switching away from this character.
+        -- Used to dress the NPC standing-in at home.
+        appearance = {
+            female      = false,
+            skinTexture = nil,
+            hairStyle   = nil,
+            hairColor   = nil,   -- {r, g, b}
+            beardStyle  = nil,
+            beardColor  = nil,   -- {r, g, b}
+            clothing    = {},    -- bodyLocation -> itemFullType
+        },
+
+        -- Persistent outfit ID of the NPC zombie representing this character.
+        -- nil when the character is active (being played by the player).
+        npcId = nil,
     }
 end
 

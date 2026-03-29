@@ -1,5 +1,29 @@
 UI_EN = {
-    UI_We_Switch = "Switch",
-    UI_We_NeverUsed = "Not used yet",
-    UI_We_SwitchedTo = "Switched to: ",
+    UI_We_Switch         = "Switch",
+    UI_We_NeverUsed      = "Not used yet",
+    UI_We_SwitchedTo     = "Switched to: ",
+
+    -- Home base setup
+    UI_We_SetHome        = "Set home base for %1",
+    UI_We_HomeSet        = "Home base set!",
+    UI_We_HomeAt         = "Home: %1, %2",
+    UI_We_NoHome         = "No home set (right-click to set)",
+
+    -- Panel status bar
+    UI_We_Status_AtBase  = "At home base  —  switching available",
+    UI_We_Status_NoHome  = "Set a home base first  (right-click any tile)",
+    UI_We_Status_TooFar  = "Return to your home base to switch characters",
+
+    -- switchTo() blocked feedback (halo text above player)
+    UI_We_Switch_noHome  = "Set a home base first!",
+    UI_We_Switch_tooFar  = "You must be at your home base to switch!",
+
+    -- NPC status in panel
+    UI_We_NPC_AtHome     = "[ NPC: at home base ]",
+    UI_We_NPC_Unspawned  = "[ NPC: not yet spawned ]",
+
+    -- Context menu base management section
+    UI_We_BaseMenu_Title    = "Base",
+    UI_We_BaseMenu_SwitchTo = "Switch to: %1",
+    UI_We_BaseMenu_StartAs  = "Start playing as: %1",
 }

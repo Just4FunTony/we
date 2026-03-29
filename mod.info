@@ -1,7 +1,7 @@
 name=We
 poster=poster.png
 id=We
-description=A custom mod for Project Zomboid.
+description=Multi-character system: switch between survivors who live as NPCs at home base.
 url=
-modversion=1.0
-pzversion=41.78
+modversion=2.0
+pzversion=42
