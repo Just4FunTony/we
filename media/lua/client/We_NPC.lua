@@ -35,17 +35,15 @@ function WeNPC.captureAppearance(player)
         end
     end
 
-    -- Capture worn clothing via WornItems (getType() returns script name, no module prefix)
-    local wornItems = player:getWornItems()
-    for i = 0, wornItems:size() - 1 do
-        local wornItem = wornItems:get(i)
-        if wornItem then
-            local item = wornItem:getItem()
-            if item then
-                local t = item:getType()
-                if t and t ~= "" then
-                    table.insert(app.itemVisuals, tostring(t))
-                end
+    -- Capture worn clothing item types (for NPC dressing; iterate inventory for worn items)
+    local items = player:getInventory():getItems()
+    for i = 0, items:size() - 1 do
+        local item = items:get(i)
+        local loc = item.getBodyLocation and item:getBodyLocation()
+        if loc then
+            local t = item:getFullType()
+            if t and t ~= "" then
+                table.insert(app.itemVisuals, t)
             end
         end
     end
@@ -79,10 +77,11 @@ function WeNPC.applyVisuals(char, app)
     local itemVisuals = char:getItemVisuals()
     itemVisuals:clear()
     if app.itemVisuals then
-        for _, itemType in ipairs(app.itemVisuals) do
+        for _, entry in ipairs(app.itemVisuals) do
+            local t = type(entry) == "table" and (entry.itemType or "") or tostring(entry)
             local iv = ItemVisual.new()
-            iv:setItemType(itemType)
-            iv:setClothingItemName(itemType)
+            iv:setItemType(t)
+            iv:setClothingItemName(t)
             itemVisuals:add(iv)
         end
     end
@@ -187,13 +186,24 @@ local function onZombieUpdate(zombie)
     local brain = zombie:getModData().weBrain
     if not brain or not brain.slotIndex then return end
 
-    -- Zombie confirmed gone: clear pending-despawn flag so future spawns are allowed.
+    -- Zombie confirmed dead: if this is not a managed despawn (PendingDespawn is nil),
+    -- the NPC was killed by external means — remove the slot entirely.
     if zombie:isDead() or not zombie:getCurrentSquare() then
+        if not WeNPC.PendingDespawn[brain.slotIndex] then
+            -- Killed by player or world — remove the slot
+            WeData.killSlot(brain.slotIndex)
+        end
         if WeNPC.Cache[brain.slotIndex] == zombie then
             WeNPC.Cache[brain.slotIndex] = nil
         end
         WeNPC.PendingDespawn[brain.slotIndex] = nil
         return
+    end
+
+    -- Keep outline green even during despawn transition so the zombie never flashes red.
+    if zombie.setOutlineHighlight then
+        zombie:setOutlineHighlight(0, true)
+        zombie:setOutlineHighlightCol(0, 0.2, 0.9, 0.2, 1.0)
     end
 
     -- Do not re-cache a zombie that is being despawned — the despawn command is in flight
@@ -252,6 +262,7 @@ local function onZombieUpdate(zombie)
     end
 end
 
+
 Events.OnZombieUpdate.Add(onZombieUpdate)
 
 -- ─── OnPlayerUpdate — maintenance + home-snap for NPC players and panic ──────
@@ -291,6 +302,17 @@ local function onPlayerUpdate(player)
         end
 
         stats:set(CharacterStat.PANIC, 0)
+
+        -- Re-apply green outline on all cached NPCs after the engine's targeting pass.
+        -- This overrides any red "hostile target" highlight the engine may have set.
+        for _, npc in pairs(WeNPC.Cache) do
+            if npc and npc ~= "pending" and instanceof(npc, "IsoZombie") then
+                if npc.setOutlineHighlight then
+                    npc:setOutlineHighlight(0, true)
+                    npc:setOutlineHighlightCol(0, 0.2, 0.9, 0.2, 1.0)
+                end
+            end
+        end
         return
     end
 

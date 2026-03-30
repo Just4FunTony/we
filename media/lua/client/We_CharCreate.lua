@@ -116,23 +116,26 @@ function WeCharCreate.randomize(player)
     local posTraitDefs = pickRandom(collectPositiveTraits(), n)
     local negTraitDefs = pickRandom(collectNegativeTraits(), n)
 
-    -- Clear all current traits
-    player:getCharacterTraits():getKnownTraits():clear()
-
-    -- Set profession
+    -- Set profession FIRST — setCharacterProfession() triggers an engine callback that
+    -- re-populates knownTraits with the old profession's grants.  We clear AFTER so we
+    -- get a clean slate regardless of what that callback did.
     desc:setCharacterProfession(profDef:getType())
 
-    -- Apply granted (free) traits from profession
+    -- Now clear everything and rebuild exactly the trait set we want.
+    -- No hasTrait guards: the list was just cleared, so there can be no duplicates.
+    local knownTraits = player:getCharacterTraits():getKnownTraits()
+    knownTraits:clear()
+    print("[We] Randomize: after clear size=" .. knownTraits:size())
+
     local grantedTraits = profDef:getGrantedTraits()
     if grantedTraits then
-        local knownTraits = player:getCharacterTraits():getKnownTraits()
         for i = 0, grantedTraits:size()-1 do
-            local traitEnum = grantedTraits:get(i)
-            if not player:hasTrait(traitEnum) then
-                knownTraits:add(traitEnum)
-            end
+            knownTraits:add(grantedTraits:get(i))
         end
     end
+    for _, t in ipairs(posTraitDefs) do knownTraits:add(t:getType()) end
+    for _, t in ipairs(negTraitDefs) do knownTraits:add(t:getType()) end
+    print("[We] Randomize: after add size=" .. knownTraits:size())
 
     -- Apply XP boosts from profession
     local xpBoostRaw = profDef:getXpBoosts()
@@ -144,15 +147,6 @@ function WeCharCreate.randomize(player)
                 xpSys:AddXP(perk, level:intValue())
             end
         end
-    end
-
-    -- Apply selected traits
-    local knownTraits = player:getCharacterTraits():getKnownTraits()
-    for _, t in ipairs(posTraitDefs) do
-        if not player:hasTrait(t:getType()) then knownTraits:add(t:getType()) end
-    end
-    for _, t in ipairs(negTraitDefs) do
-        if not player:hasTrait(t:getType()) then knownTraits:add(t:getType()) end
     end
 
     -- Reset stats to a clean start (B42 API: stats:set(CharacterStat.X, value))

@@ -157,14 +157,34 @@ function WeData.saveSlot(index)
 
     -- Inventory
     slot.inventory = {}
+
+    -- Worn clothing: use getItemVisuals + getLastStandString to preserve color tinting.
+    local ivContainer = ItemVisuals and ItemVisuals.new()
+    if ivContainer then
+        player:getItemVisuals(ivContainer)
+        for i = 0, ivContainer:size() - 1 do
+            local iv = ivContainer:get(i)
+            if iv then
+                local s = iv.getLastStandString and iv:getLastStandString()
+                if s then
+                    table.insert(slot.inventory, { lastStandStr = s })
+                end
+            end
+        end
+    end
+
+    -- Non-worn items (food, tools, weapons, etc.)
     local items = player:getInventory():getItems()
     for i = 0, items:size() - 1 do
         local item = items:get(i)
-        table.insert(slot.inventory, {
-            fullType  = item:getFullType(),
-            condition = item.getCondition and item:getCondition() or 100,
-            uses      = item.getUsedDelta and item:getUsedDelta() or 0,
-        })
+        local loc = item.getBodyLocation and item:getBodyLocation()
+        if not loc then   -- skip worn clothing (already captured above)
+            table.insert(slot.inventory, {
+                fullType  = item:getFullType(),
+                condition = item.getCondition and item:getCondition() or 100,
+                uses      = item.getUsedDelta and item:getUsedDelta() or 0,
+            })
+        end
     end
 
     -- Skills
@@ -233,15 +253,21 @@ function WeData.loadSlot(index)
     if player.clearWornItems then player:clearWornItems() end
     player:getInventory():clear()
     for _, itemData in ipairs(slot.inventory) do
-        local item = instanceItem(itemData.fullType)
-        if item then
-            if item.setCondition then item:setCondition(itemData.condition) end
-            if item.setUsedDelta then item:setUsedDelta(itemData.uses) end
-            player:getInventory():AddItem(item)
-            -- Re-wear clothing items using each item's own body location
-            local loc = item.getBodyLocation and item:getBodyLocation()
-            if loc then
-                pcall(player.setWornItem, player, loc, item)
+        if itemData.lastStandStr then
+            -- Worn clothing saved with color: createLastStandItem preserves tint
+            local item = ItemVisual.createLastStandItem and ItemVisual.createLastStandItem(itemData.lastStandStr)
+            if item then
+                player:getInventory():AddItem(item)
+                local loc = item.getBodyLocation and item:getBodyLocation()
+                if loc then pcall(player.setWornItem, player, loc, item) end
+            end
+        else
+            -- Regular non-worn inventory item
+            local item = instanceItem(itemData.fullType)
+            if item then
+                if item.setCondition then item:setCondition(itemData.condition) end
+                if item.setUsedDelta then item:setUsedDelta(itemData.uses) end
+                player:getInventory():AddItem(item)
             end
         end
     end
@@ -256,7 +282,8 @@ function WeData.loadSlot(index)
         end
     end
 
-    -- Profession
+    -- Profession: set FIRST so the engine's trait-recalculation side-effect fires now,
+    -- before we clear. We'll clear right after to get a clean slate.
     if slot.profession then
         local desc = player:getDescriptor()
         if desc then
@@ -265,28 +292,21 @@ function WeData.loadSlot(index)
         end
     end
 
-    -- Traits: CharacterTraitDefinition.get(rl):getType() is the confirmed working path
-    -- (same pattern used in WeCharCreate.randomize via getTraits():get(i):getType()).
+    -- Traits: clear AFTER profession so any engine-triggered restore is wiped out,
+    -- then unconditionally add the saved traits (no hasTrait guard).
     if slot.traits then
         local knownTraits = player:getCharacterTraits():getKnownTraits()
         knownTraits:clear()
         for _, traitName in ipairs(slot.traits) do
-            local rl       = ResourceLocation.of(traitName)
-            local traitEnum
-            local def = CharacterTraitDefinition.get and CharacterTraitDefinition.get(rl)
-            if def then
-                traitEnum = def:getType()
-            elseif CharacterTrait and CharacterTrait.get then
-                traitEnum = CharacterTrait.get(rl)
-            end
-            if traitEnum then
-                knownTraits:add(traitEnum)
+            local traitType = CharacterTrait.get(ResourceLocation.of(traitName))
+            if traitType then
+                knownTraits:add(traitType)
                 print("[We] LoadTrait OK slot=" .. index .. " " .. traitName)
             else
                 print("[We] LoadTrait MISS slot=" .. index .. " " .. traitName)
             end
         end
-        print("[We] Traits loaded: " .. #slot.traits .. " saved, knownTraits size=" .. knownTraits:size())
+        print("[We] Traits loaded: " .. #slot.traits .. " saved, knownTraits=" .. knownTraits:size())
     end
 
     -- Appearance: restore hair / skin / beard onto the player
@@ -323,6 +343,23 @@ function WeData.loadSlot(index)
     end
 
     print("[We] Slot " .. index .. " loaded.")
+end
+
+-- ─── Kill slot (NPC died) ─────────────────────────────────────────────────────
+
+function WeData.killSlot(index)
+    local data = ensureModData()
+    local slot = data.slots[index]
+    if not slot then return end
+
+    -- Wipe saved position so the slot appears empty and is skipped by spawn/roster logic
+    slot.x = nil
+    slot.y = nil
+    slot.z = nil
+    slot.npcId = nil
+    WeNPC.Cache[index] = nil
+
+    print("[We] Slot " .. index .. " killed (NPC died).")
 end
 
 -- ─── Switch ───────────────────────────────────────────────────────────────────
