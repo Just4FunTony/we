@@ -1,9 +1,7 @@
--- We: Home base context menu.
--- Right-click any ground tile to set it as the active character's home base.
+-- We: Right-click any tile to set it as the home base for character switching.
 
 local function onFillWorldObjectContextMenu(playerNum, context, worldObjects, test)
     if playerNum ~= 0 then return end
-
     local player = getSpecificPlayer(0)
     if not player then return end
 
@@ -11,16 +9,21 @@ local function onFillWorldObjectContextMenu(playerNum, context, worldObjects, te
     local square = fetch and fetch.clickedSquare
     if not square then return end
 
-    local activeSlot     = WeData.getActiveSlot()
-    local activeSlotData = WeData.getData().slots[activeSlot]
-    local sx, sy, sz     = square:getX(), square:getY(), square:getZ()
+    -- Only show when no safehouse is set yet (MP uses PZ safehouse system)
+    local isMP = getWorld and getWorld():getGameMode() == "Multiplayer"
+    if isMP then return end
+
+    local data = WeData.getData()
+    if data.homeX then return end  -- already set; remove via F2 panel
+
+    local sx, sy, sz = square:getX(), square:getY(), square:getZ()
 
     context:addOption(
-        getText("UI_We_SetHome", activeSlotData.name or ("Slot " .. activeSlot)),
+        We.getText("UI_We_SetHome"),
         nil,
         function()
-            WeData.setHome(activeSlot, sx, sy, sz)
-            HaloTextHelper.addGoodText(player, getText("UI_We_HomeSet"))
+            WeData.setHome(sx, sy, sz)
+            HaloTextHelper.addGoodText(player, We.getText("UI_We_HomeSet"))
         end
     )
 end

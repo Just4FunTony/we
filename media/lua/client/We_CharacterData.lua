@@ -5,6 +5,17 @@ WeData = WeData or {}
 
 local modDataRef = nil   -- cached reference into getGameTime():getModData()
 
+-- B42 CharacterStat enum map (replaces the old stats:getHunger() API)
+local STAT_ENUM = {
+    Hunger      = CharacterStat.HUNGER,
+    Thirst      = CharacterStat.THIRST,
+    Fatigue     = CharacterStat.FATIGUE,
+    Boredom     = CharacterStat.BOREDOM,
+    Stress      = CharacterStat.STRESS,
+    Pain        = CharacterStat.PAIN,
+    Unhappiness = CharacterStat.UNHAPPINESS,
+}
+
 -- ─── Internal helpers ──────────────────────────────────────────────────────────
 
 local function getPlayer()
@@ -17,7 +28,8 @@ local function ensureModData()
     if not md[We.MOD_DATA_KEY] then
         md[We.MOD_DATA_KEY] = {
             activeSlot = 1,
-            slots      = {},
+            homeX = nil, homeY = nil, homeZ = nil,
+            slots  = {},
         }
         for i = 1, We.MAX_SLOTS do
             md[We.MOD_DATA_KEY].slots[i] = We.defaultSlot(i)
@@ -36,17 +48,11 @@ function WeData.init()
         if not data.slots[i] then
             data.slots[i] = We.defaultSlot(i)
         else
-            -- Back-fill fields added in v2
             if not data.slots[i].appearance then
                 data.slots[i].appearance = We.defaultSlot(i).appearance
-            end
-            if data.slots[i].homeX == nil then
-                data.slots[i].homeX = nil
-                data.slots[i].homeY = nil
-                data.slots[i].homeZ = nil
-            end
-            if data.slots[i].npcId == nil then
-                data.slots[i].npcId = nil
+            elseif not data.slots[i].appearance.itemVisuals then
+                -- Migrate old saves that used the clothing{} dict format
+                data.slots[i].appearance.itemVisuals = {}
             end
         end
     end
@@ -69,12 +75,51 @@ function WeData.renameSlot(index, name)
     ensureModData().slots[index].name = name
 end
 
-function WeData.setHome(slotIndex, x, y, z)
-    local slot  = ensureModData().slots[slotIndex]
-    slot.homeX  = x
-    slot.homeY  = y
-    slot.homeZ  = z
-    print("[We] Home set for slot " .. slotIndex .. " → " .. x .. "," .. y .. "," .. z)
+function WeData.setHome(x, y, z)
+    local data = ensureModData()
+    data.homeX = x
+    data.homeY = y
+    data.homeZ = z
+    print("[We] Home set → " .. x .. "," .. y .. "," .. z)
+end
+
+function WeData.clearHome()
+    local data = ensureModData()
+    data.homeX = nil
+    data.homeY = nil
+    data.homeZ = nil
+end
+
+-- Returns true if switching is allowed at the player's current position.
+-- Multiplayer: must be inside a PZ safehouse the player owns/belongs to.
+-- Singleplayer: must have a home set and be within HOME_SWITCH_RADIUS tiles.
+function WeData.isAtHomeBase()
+    local player = getPlayer()
+    if not player then return false end
+
+    local isMP = getWorld and getWorld():getGameMode() == "Multiplayer"
+
+    if isMP then
+        local sq = player.getCurrentSquare and player:getCurrentSquare()
+        if sq and SafeHouse.isSafeHouse and SafeHouse.isSafeHouse(sq, player:getUsername(), true) then
+            return true
+        end
+        return false
+    end
+
+    -- SP: radius check from home point
+    local data = ensureModData()
+    if not data.homeX then
+        return false
+    end
+
+    local px, py = player:getX(), player:getY()
+    local dx = px - data.homeX
+    local dy = py - data.homeY
+    local dist2  = dx * dx + dy * dy
+    local limit2 = We.HOME_SWITCH_RADIUS * We.HOME_SWITCH_RADIUS
+    local ok = dist2 <= limit2
+    return ok
 end
 
 -- ─── Save slot ────────────────────────────────────────────────────────────────
@@ -88,16 +133,25 @@ function WeData.saveSlot(index)
     local stats = player:getStats()
     local xpSys = player:getXp()
 
+    -- Character name from descriptor (forename + surname)
+    local desc = player:getDescriptor()
+    if desc then
+        local fore = desc:getForename() or ""
+        local sur  = desc:getSurname()  or ""
+        local full = (fore .. " " .. sur):match("^%s*(.-)%s*$")
+        if full ~= "" then slot.name = full end
+    end
+
     -- Position
     slot.x = player:getX()
     slot.y = player:getY()
     slot.z = player:getZ()
 
-    -- Stats
+    -- Stats (B42 API: stats:get(CharacterStat.X))
     for _, key in ipairs(We.STATS_KEYS) do
-        local getter = stats["get" .. key]
-        if getter then
-            slot.stats[key] = getter(stats)
+        local statEnum = STAT_ENUM[key]
+        if statEnum then
+            slot.stats[key] = stats:get(statEnum)
         end
     end
 
@@ -115,20 +169,36 @@ function WeData.saveSlot(index)
 
     -- Skills
     slot.skills = {}
-    local perks = Perks.getList()
-    for i = 0, perks:size() - 1 do
-        local perk = perks:get(i)
-        local key  = tostring(perk)
-        slot.skills[key] = {
-            level = xpSys:getPerkLevel(perk),
+    for i = 0, Perks.getMaxIndex() - 1 do
+        local perk = Perks.fromIndex(i)
+        slot.skills[i] = {
+            level = player:getPerkLevel(perk),
             xp    = xpSys:getXP(perk),
         }
+    end
+
+    -- Profession
+    if desc then
+        local prof = desc:getCharacterProfession()
+        slot.profession = prof and tostring(prof) or nil
+    end
+
+    -- Traits (stored as full "namespace:path" ResourceLocation strings)
+    slot.traits = {}
+    local knownTraits = player:getCharacterTraits():getKnownTraits()
+    for i = 0, knownTraits:size() - 1 do
+        local t = knownTraits:get(i)
+        if t then
+            local s = tostring(t)
+            table.insert(slot.traits, s)
+            print("[We] SaveTrait slot=" .. index .. " trait=" .. s)
+        end
     end
 
     -- Appearance (for NPC dressing)
     slot.appearance = WeNPC.captureAppearance(player)
 
-    print("[We] Slot " .. index .. " saved.")
+    print("[We] Slot " .. index .. " saved. traits=" .. #slot.traits)
 end
 
 -- ─── Load slot ────────────────────────────────────────────────────────────────
@@ -146,11 +216,11 @@ function WeData.loadSlot(index)
     local stats = player:getStats()
     local xpSys = player:getXp()
 
-    -- Stats
+    -- Stats (B42 API: stats:set(CharacterStat.X, value))
     for _, key in ipairs(We.STATS_KEYS) do
-        local setter = stats["set" .. key]
-        if setter and slot.stats[key] then
-            setter(stats, slot.stats[key])
+        local statEnum = STAT_ENUM[key]
+        if statEnum and slot.stats[key] then
+            stats:set(statEnum, slot.stats[key])
         end
     end
 
@@ -158,9 +228,9 @@ function WeData.loadSlot(index)
     player:setX(slot.x)
     player:setY(slot.y)
     player:setZ(slot.z)
-    player:resetMoveSpeed()
 
-    -- Inventory
+    -- Inventory + clothing
+    if player.clearWornItems then player:clearWornItems() end
     player:getInventory():clear()
     for _, itemData in ipairs(slot.inventory) do
         local item = instanceItem(itemData.fullType)
@@ -168,47 +238,91 @@ function WeData.loadSlot(index)
             if item.setCondition then item:setCondition(itemData.condition) end
             if item.setUsedDelta then item:setUsedDelta(itemData.uses) end
             player:getInventory():AddItem(item)
+            -- Re-wear clothing items using each item's own body location
+            local loc = item.getBodyLocation and item:getBodyLocation()
+            if loc then
+                pcall(player.setWornItem, player, loc, item)
+            end
         end
     end
 
     -- Skills
-    local perks = Perks.getList()
-    for i = 0, perks:size() - 1 do
-        local perk  = perks:get(i)
-        local key   = tostring(perk)
-        local saved = slot.skills[key]
+    for i = 0, Perks.getMaxIndex() - 1 do
+        local perk  = Perks.fromIndex(i)
+        local saved = slot.skills[i]
         if saved then
-            xpSys:setCurrentLevel(perk, saved.level)
-            local delta = saved.xp - xpSys:getXP(perk)
-            if delta > 0 then xpSys:AddXP(perk, delta) end
+            player:setPerkLevelDebug(perk, saved.level)
+            xpSys:setXPToLevel(perk, saved.level)
         end
     end
 
+    -- Profession
+    if slot.profession then
+        local desc = player:getDescriptor()
+        if desc then
+            local profEnum = CharacterProfession.get(ResourceLocation.of(slot.profession))
+            if profEnum then desc:setCharacterProfession(profEnum) end
+        end
+    end
+
+    -- Traits: CharacterTraitDefinition.get(rl):getType() is the confirmed working path
+    -- (same pattern used in WeCharCreate.randomize via getTraits():get(i):getType()).
+    if slot.traits then
+        local knownTraits = player:getCharacterTraits():getKnownTraits()
+        knownTraits:clear()
+        for _, traitName in ipairs(slot.traits) do
+            local rl       = ResourceLocation.of(traitName)
+            local traitEnum
+            local def = CharacterTraitDefinition.get and CharacterTraitDefinition.get(rl)
+            if def then
+                traitEnum = def:getType()
+            elseif CharacterTrait and CharacterTrait.get then
+                traitEnum = CharacterTrait.get(rl)
+            end
+            if traitEnum then
+                knownTraits:add(traitEnum)
+                print("[We] LoadTrait OK slot=" .. index .. " " .. traitName)
+            else
+                print("[We] LoadTrait MISS slot=" .. index .. " " .. traitName)
+            end
+        end
+        print("[We] Traits loaded: " .. #slot.traits .. " saved, knownTraits size=" .. knownTraits:size())
+    end
+
+    -- Appearance: restore hair / skin / beard onto the player
+    -- (clothing is re-worn below via the inventory restore)
+    local app = slot.appearance
+    if app then
+        local vis = player:getHumanVisual()
+        if vis then
+            -- IsoPlayer uses setFemale(), not setFemaleEtc() (which is zombie-only)
+            player:setFemale(app.female or false)
+            local desc = player:getDescriptor()
+            if desc then desc:setFemale(app.female or false) end
+
+            if app.skinTexture and app.skinTexture ~= "" then
+                vis:setSkinTextureName(app.skinTexture)
+            end
+            if app.hairStyle  then vis:setHairModel(app.hairStyle)  end
+            if app.hairColor  then
+                vis:setHairColor(ImmutableColor.new(app.hairColor.r, app.hairColor.g, app.hairColor.b, 1))
+            end
+            if app.beardStyle then vis:setBeardModel(app.beardStyle) end
+            if app.beardColor then
+                vis:setBeardColor(ImmutableColor.new(app.beardColor.r, app.beardColor.g, app.beardColor.b, 1))
+            end
+        end
+        player:resetModelNextFrame()
+        player:resetModel()
+    end
+
+    -- Refresh character info panel (traits / profession / avatar)
+    local panel = getPlayerInfoPanel and getPlayerInfoPanel(0)
+    if panel and panel.charScreen then
+        panel.charScreen.refreshNeeded = true
+    end
+
     print("[We] Slot " .. index .. " loaded.")
-end
-
--- ─── Base proximity check ────────────────────────────────────────────────────
-
--- Returns true if the player is within We.HOME_SWITCH_RADIUS of their home base.
--- Also returns a status string for UI feedback.
-function WeData.isAtHomeBase()
-    local player = getPlayer()
-    if not player then return false, "noPlayer" end
-
-    local slot = ensureModData().slots[ensureModData().activeSlot]
-    if not slot.homeX then
-        return false, "noHome"
-    end
-
-    local dx   = player:getX() - slot.homeX
-    local dy   = player:getY() - slot.homeY
-    local dist = math.sqrt(dx * dx + dy * dy)
-
-    if dist > We.HOME_SWITCH_RADIUS then
-        return false, "tooFar"
-    end
-
-    return true, "ok"
 end
 
 -- ─── Switch ───────────────────────────────────────────────────────────────────
@@ -217,53 +331,49 @@ function WeData.switchTo(index)
     local data = ensureModData()
     if index == data.activeSlot then return end
 
-    -- Must be at home base to switch characters
-    local ok, reason = WeData.isAtHomeBase()
+    local ok = WeData.isAtHomeBase()
     if not ok then
         local player = getPlayer()
         if player then
-            local msg = getText("UI_We_Switch_" .. reason)
-            HaloTextHelper.addBadText(player, msg)
+            HaloTextHelper.addBadText(player, We.getText("UI_We_Switch_noSafehouse"))
         end
         return
     end
 
     local prev = data.activeSlot
 
-    -- 1. Save the character we are leaving (captures appearance too)
     WeData.saveSlot(prev)
 
-    -- 2. Despawn the NPC for the slot we are switching INTO (we are taking over)
     if data.slots[index].npcId then
         WeNPC.despawnForSlot(index)
     end
 
-    -- 3. Spawn an NPC for the character we are leaving
     if data.slots[prev].x ~= nil then
         WeNPC.spawnForSlot(prev)
     end
 
-    -- 4. Activate the new slot
-    data.activeSlot = index
-
-    -- 5. Load the target character or initialise a brand-new one
+    -- For a new character: randomize BEFORE setting activeSlot so that any
+    -- OnSave event firing mid-switch doesn't capture the old character's traits.
     local player = getPlayer()
     if data.slots[index].x == nil then
-        -- First time in this slot: randomize profession + traits, then snapshot
         if player then
             local summary = WeCharCreate.randomize(player)
+            data.activeSlot = index            -- set NOW, after traits are ready
             data.slots[index].creation = summary
+            if summary.charName then
+                data.slots[index].name = summary.charName
+            end
             WeData.saveSlot(index)
             WeCharCreate.showPopup(summary)
         end
         print("[We] New character created for slot " .. index)
     else
+        data.activeSlot = index
         WeData.loadSlot(index)
     end
 
-    -- 6. Feedback text
     if player then
-        HaloTextHelper.addGoodText(player, getText("UI_We_SwitchedTo") .. data.slots[index].name)
+        HaloTextHelper.addGoodText(player, We.getText("UI_We_SwitchedTo") .. data.slots[index].name)
     end
 end
 

@@ -1,63 +1,52 @@
 -- We: Client-side NPC manager.
--- Spawns, maintains, and despawns zombie stand-ins for inactive characters.
--- Uses only vanilla Project Zomboid B42 APIs.
+-- Spawns, maintains, and despawns NPC stand-ins for inactive characters.
+-- SP: uses createNPCPlayer for proper idle animations.
+-- MP: falls back to server-side zombie via sendClientCommand.
 
 WeNPC = WeNPC or {}
 
--- B42 body-location render order (determines clothing layer priority)
-WeNPC.BODY_LOCATIONS = {
-    "UnderwearBottom", "UnderwearTop", "UnderwearExtra1", "UnderwearExtra2", "Underwear",
-    "Torso1Legs1", "Legs1",
-    "Ears", "EarTop", "Nose", "Hat", "FullHat",
-    "Mask", "MaskEyes", "Eyes", "RightEye", "LeftEye",
-    "Neck", "Necklace", "Gorget", "Scarf",
-    "TankTop", "Tshirt", "ShortSleeveShirt", "Shirt",
-    "VestTexture", "Sweater", "SweaterHat", "TorsoExtraVest", "Cuirass", "TorsoExtra",
-    "Jacket", "JacketHat", "Jacket_Down", "JacketHat_Bulky", "Jacket_Bulky", "JacketSuit", "FullTop",
-    "RightWrist", "Right_MiddleFinger", "Right_RingFinger",
-    "LeftWrist",  "Left_MiddleFinger",  "Left_RingFinger",
-    "Hands", "HandsRight", "HandsLeft",
-    "Pants", "PantsExtra", "ShortPants", "ShortsShort",
-    "LongSkirt", "Skirt", "Dress", "LongDress",
-    "BathRobe", "FullSuit", "FullSuitHead", "Boilersuit", "Tail", "TorsoExtraVestBullet",
-    "ShoulderpadRight", "ShoulderpadLeft",
-    "Elbow_Right", "Elbow_Left", "ForeArm_Right", "ForeArm_Left",
-    "Thigh_Right", "Thigh_Left", "Knee_Right", "Knee_Left", "Calf_Right", "Calf_Left",
-    "FannyPackFront", "FannyPackBack", "Webbing",
-    "AmmoStrap", "AnkleHolster", "BeltExtra", "ShoulderHolster",
-    "Socks", "Shoes",
-}
-
--- Live zombie cache: persistentOutfitID → IsoZombie
+-- Live NPC cache: slotIndex → IsoPlayer or IsoZombie
 WeNPC.Cache = {}
 
+-- Slots whose zombie has been despawned but may still be alive for 1-2 frames.
+-- onZombieUpdate must not re-cache these until the zombie is confirmed gone.
+WeNPC.PendingDespawn = {}
+
 -- ─── Appearance capture ────────────────────────────────────────────────────────
+-- Captures the player's hair/skin/beard visuals plus a list of worn item types.
+-- Uses getWornItems() which is the authoritative clothing source for IsoPlayer.
 
 function WeNPC.captureAppearance(player)
-    local app    = {}
-    app.female   = player:isFemale()
-    app.clothing = {}
+    local app = {}
+    app.female      = player:isFemale()
+    app.itemVisuals = {}
 
     local vis = player:getHumanVisual()
     if vis then
-        app.skinTexture = vis:getSkinTextureName()
+        local st = vis:getSkinTexture()
+        app.skinTexture = (st and st ~= "") and tostring(st) or nil
         app.hairStyle   = vis:getHairModel()
         local hc = vis:getHairColor()
-        if hc then app.hairColor = {r=hc:getR(), g=hc:getG(), b=hc:getB()} end
+        if hc then app.hairColor = {r=hc:getRedFloat(), g=hc:getGreenFloat(), b=hc:getBlueFloat()} end
         if not app.female then
             app.beardStyle = vis:getBeardModel()
             local bc = vis:getBeardColor()
-            if bc then app.beardColor = {r=bc:getR(), g=bc:getG(), b=bc:getB()} end
+            if bc then app.beardColor = {r=bc:getRedFloat(), g=bc:getGreenFloat(), b=bc:getBlueFloat()} end
         end
     end
 
-    local worn = player:getWornItems()
-    for i = 0, worn:size() - 1 do
-        local wi   = worn:get(i)
-        local item = wi and wi:getItem()
-        local loc  = wi and wi:getBodyLocation()
-        if item and loc then
-            app.clothing[loc] = item:getFullType()
+    -- Capture worn clothing via WornItems (getType() returns script name, no module prefix)
+    local wornItems = player:getWornItems()
+    for i = 0, wornItems:size() - 1 do
+        local wornItem = wornItems:get(i)
+        if wornItem then
+            local item = wornItem:getItem()
+            if item then
+                local t = item:getType()
+                if t and t ~= "" then
+                    table.insert(app.itemVisuals, tostring(t))
+                end
+            end
         end
     end
 
@@ -65,27 +54,32 @@ function WeNPC.captureAppearance(player)
 end
 
 -- ─── Visual application ────────────────────────────────────────────────────────
+-- Works on any IsoGameCharacter (IsoPlayer NPC or IsoZombie).
 
-function WeNPC.applyVisuals(zombie, app)
-    local vis = zombie:getHumanVisual()
+function WeNPC.applyVisuals(char, app)
+    if not app then return end
+    local vis = char:getHumanVisual()
     if not vis then return end
 
-    if app.skinTexture then vis:setSkinTextureName(app.skinTexture) end
-    if app.hairStyle   then vis:setHairModel(app.hairStyle)         end
-    if app.hairColor   then
-        vis:setHairColor(ImmutableColor.new(app.hairColor.r, app.hairColor.g, app.hairColor.b))
+    -- setFemaleEtc exists on IsoZombie; IsoSurvivor/IsoPlayer use setFemale via descriptor
+    if char.setFemaleEtc then char:setFemaleEtc(app.female or false) end
+
+    if app.skinTexture and app.skinTexture ~= "" and vis.setSkinTextureName then
+        vis:setSkinTextureName(app.skinTexture)
     end
-    if app.beardStyle  then vis:setBeardModel(app.beardStyle)       end
-    if app.beardColor  then
-        vis:setBeardColor(ImmutableColor.new(app.beardColor.r, app.beardColor.g, app.beardColor.b))
+    if app.hairStyle   and vis.setHairModel  then vis:setHairModel(app.hairStyle)   end
+    if app.hairColor   and vis.setHairColor  then
+        vis:setHairColor(ImmutableColor.new(app.hairColor.r, app.hairColor.g, app.hairColor.b, 1))
+    end
+    if app.beardStyle  and vis.setBeardModel then vis:setBeardModel(app.beardStyle) end
+    if app.beardColor  and vis.setBeardColor then
+        vis:setBeardColor(ImmutableColor.new(app.beardColor.r, app.beardColor.g, app.beardColor.b, 1))
     end
 
-    -- Clothing in layer order
-    local itemVisuals = zombie:getItemVisuals()
+    local itemVisuals = char:getItemVisuals()
     itemVisuals:clear()
-    for _, loc in ipairs(WeNPC.BODY_LOCATIONS) do
-        local itemType = app.clothing and app.clothing[loc]
-        if itemType then
+    if app.itemVisuals then
+        for _, itemType in ipairs(app.itemVisuals) do
             local iv = ItemVisual.new()
             iv:setItemType(itemType)
             iv:setClothingItemName(itemType)
@@ -93,7 +87,7 @@ function WeNPC.applyVisuals(zombie, app)
         end
     end
 
-    -- Remove blood / dirt from a freshly "spawned" survivor
+    -- Remove blood and dirt so the NPC looks like a living survivor
     local maxIdx = BloodBodyPartType.MAX:index()
     for i = 0, maxIdx - 1 do
         local part = BloodBodyPartType.FromIndex(i)
@@ -101,24 +95,20 @@ function WeNPC.applyVisuals(zombie, app)
         vis:setDirt(part, 0)
     end
 
-    zombie:resetModelNextFrame()
-    zombie:resetModel()
+    char:resetModelNextFrame()
+    char:resetModel()
 end
 
 -- ─── Brain builder ─────────────────────────────────────────────────────────────
 
 function WeNPC.buildBrain(slot, slotIndex)
-    local homeX = slot.homeX or slot.x or 0
-    local homeY = slot.homeY or slot.y or 0
-    local homeZ = slot.homeZ or slot.z or 0
-
+    -- NPC anchors to the character's last saved position so they stay where you left them
     return {
-        id         = nil,           -- assigned after spawn
         slotIndex  = slotIndex,
         slotName   = slot.name,
-        homeX      = homeX,
-        homeY      = homeY,
-        homeZ      = homeZ,
+        homeX      = slot.x or 0,
+        homeY      = slot.y or 0,
+        homeZ      = slot.z or 0,
         appearance = slot.appearance,
         female     = (slot.appearance and slot.appearance.female) or false,
     }
@@ -133,11 +123,30 @@ function WeNPC.spawnForSlot(slotIndex)
     local data = WeData.getData()
     local slot = data.slots[slotIndex]
     if not slot or slot.x == nil then return end
-    if slot.npcId then return end   -- already alive
+    if WeNPC.Cache[slotIndex]    then return end
 
     local brain = WeNPC.buildBrain(slot, slotIndex)
+    local isSP  = not (getWorld and getWorld():getGameMode() == "Multiplayer")
 
-    sendServerCommand(player, "We", "spawnResident", {
+    -- createNPCPlayer: debug-only native, nil in release builds
+    if isSP and createNPCPlayer then
+        local npc = createNPCPlayer(brain.homeX, brain.homeY, brain.homeZ or 0)
+        if npc then
+            npc:getModData().weBrain = brain
+            npc:setVariable("WeResident", true)
+            WeNPC.applyVisuals(npc, brain.appearance)
+            WeNPC.Cache[slotIndex] = npc
+            slot.npcId = slotIndex
+            print("[We] Spawned NPC player for slot " .. slotIndex)
+            return
+        end
+    end
+
+    -- Server-side zombie (sitting, invulnerable — best available fallback).
+    -- Set a sentinel in Cache immediately so onEveryMinute doesn't spawn a duplicate
+    -- before onZombieUpdate fires for the new zombie (can be several frames later).
+    WeNPC.Cache[slotIndex] = "pending"
+    sendClientCommand(player, "We", "spawnResident", {
         slotIndex = slotIndex,
         brain     = brain,
         x         = brain.homeX,
@@ -145,41 +154,87 @@ function WeNPC.spawnForSlot(slotIndex)
         z         = brain.homeZ,
         female    = brain.female,
     })
-
-    print("[We] Requested spawn for slot " .. slotIndex)
+    slot.npcId = slotIndex
+    print("[We] Requested server zombie for slot " .. slotIndex)
 end
 
 function WeNPC.despawnForSlot(slotIndex)
-    local player = getSpecificPlayer(0)
-    if not player then return end
+    local npc = WeNPC.Cache[slotIndex]
 
+    if npc and npc ~= "pending" and instanceof(npc, "IsoSurvivor") then
+        npc:Despawn()
+    elseif npc and npc ~= "pending" and instanceof(npc, "IsoPlayer") then
+        npc:removeFromMap()
+    else
+        -- Server zombie (or pending sentinel): remove via server command
+        local player = getSpecificPlayer(0)
+        if player then
+            sendClientCommand(player, "We", "despawnResident", {slotIndex = slotIndex})
+        end
+    end
+
+    WeNPC.Cache[slotIndex]         = nil
+    WeNPC.PendingDespawn[slotIndex] = true   -- block re-caching until zombie is confirmed gone
     local data = WeData.getData()
     local slot = data.slots[slotIndex]
-    if not slot or not slot.npcId then return end
-
-    sendServerCommand(player, "We", "despawnResident", {
-        slotIndex = slotIndex,
-        npcId     = slot.npcId,
-    })
-
-    slot.npcId = nil
-    print("[We] Requested despawn for slot " .. slotIndex)
+    if slot then slot.npcId = nil end
+    print("[We] Despawned NPC for slot " .. slotIndex)
 end
 
--- ─── OnZombieUpdate — per-tick NPC maintenance ────────────────────────────────
+-- ─── OnZombieUpdate — per-tick maintenance for server-side zombie NPCs (MP) ──
 
 local function onZombieUpdate(zombie)
-    if not zombie:getVariableBoolean("WeResident") then return end
-
     local brain = zombie:getModData().weBrain
-    if not brain then return end
+    if not brain or not brain.slotIndex then return end
 
-    local id = zombie:getPersistentOutfitID()
+    -- Zombie confirmed gone: clear pending-despawn flag so future spawns are allowed.
+    if zombie:isDead() or not zombie:getCurrentSquare() then
+        if WeNPC.Cache[brain.slotIndex] == zombie then
+            WeNPC.Cache[brain.slotIndex] = nil
+        end
+        WeNPC.PendingDespawn[brain.slotIndex] = nil
+        return
+    end
 
-    -- Keep in cache
-    WeNPC.Cache[id] = zombie
+    -- Do not re-cache a zombie that is being despawned — the despawn command is in flight
+    -- and the zombie may still be alive for a frame or two.
+    if WeNPC.PendingDespawn[brain.slotIndex] then return end
 
-    -- Apply visuals once (flag prevents re-running every tick)
+    if not zombie:getVariableBoolean("WeResident") then
+        zombie:setVariable("WeResident", true)
+    end
+
+    WeNPC.Cache[brain.slotIndex] = zombie
+
+    -- Human animation + sound suppression (re-applied each tick; cell reloads can reset these)
+    if zombie.setWalkType then zombie:setWalkType("Walk") end
+    if zombie.setNoTeeth  then zombie:setNoTeeth(true)   end
+    local zDesc = zombie:getDescriptor()
+    if zDesc and zDesc.setVoicePrefix then
+        zDesc:setVoicePrefix(brain.female and "VoiceFemale" or "VoiceMale")
+    end
+    if zombie.getEmitter then
+        local emitter = zombie:getEmitter()
+        if emitter and emitter.stopAll then emitter:stopAll() end
+    end
+
+    -- Make NPC unhittable: useless flag disables attack reactions; ZombieHitReaction
+    -- prevents engine crash (testDefense) when the zombie object is hit.
+    if zombie.setUseless then zombie:setUseless(true) end
+    zombie:setVariable("ZombieHitReaction", "Chainsaw")
+    zombie:setVariable("NoLungeTarget", true)
+
+    -- Green outline so the player can tell this is a friendly resident
+    if zombie.setOutlineHighlight then
+        zombie:setOutlineHighlight(0, true)
+        zombie:setOutlineHighlightCol(0, 0.2, 0.9, 0.2, 1.0)
+    end
+
+    -- Suppress hostile behaviour every tick
+    zombie:setTarget(nil)
+    if zombie.setTargetSeenTime then zombie:setTargetSeenTime(0) end
+
+    -- Re-apply visuals if lost after cell reload
     if not brain.visualsApplied and brain.appearance then
         WeNPC.applyVisuals(zombie, brain.appearance)
         brain.visualsApplied = true
@@ -199,33 +254,75 @@ end
 
 Events.OnZombieUpdate.Add(onZombieUpdate)
 
--- ─── EveryOneMinute — re-spawn if zombie was unloaded and cell is back ────────
+-- ─── OnPlayerUpdate — maintenance + home-snap for NPC players and panic ──────
+
+local _panicTick = 0
+local function onPlayerUpdate(player)
+    local pnum = player:getPlayerNum()
+
+    -- ── Actual player (player 0): panic suppression ──────────────────────────
+    if pnum == 0 then
+        _panicTick = _panicTick + 1
+        if _panicTick < 15 then return end
+        _panicTick = 0
+
+        local stats = player:getStats()
+        if stats:get(CharacterStat.PANIC) <= 0 then return end
+
+        local px, py = player:getX(), player:getY()
+        local radius = 16
+        local r2     = radius * radius
+
+        local cell = getCell()
+        if not cell then return end
+
+        local zList = cell:getZombieList()
+        for i = 0, zList:size() - 1 do
+            local z = zList:get(i)
+            if z and not z:isDead() then
+                local dx = z:getX() - px
+                local dy = z:getY() - py
+                if dx*dx + dy*dy <= r2 then
+                    if not z:getModData().weBrain then
+                        return  -- a real zombie is nearby — keep panic
+                    end
+                end
+            end
+        end
+
+        stats:set(CharacterStat.PANIC, 0)
+        return
+    end
+
+    -- ── NPC players created by createNPCPlayer: home-snap ────────────────────
+    local brain = player:getModData().weBrain
+    if not brain or not brain.slotIndex then return end
+
+    WeNPC.Cache[brain.slotIndex] = player
+
+    if brain.homeX then
+        local dx = player:getX() - brain.homeX
+        local dy = player:getY() - brain.homeY
+        if dx * dx + dy * dy > 9 then
+            player:setX(brain.homeX)
+            player:setY(brain.homeY)
+            player:setZ(brain.homeZ or 0)
+        end
+    end
+end
+
+Events.OnPlayerUpdate.Add(onPlayerUpdate)
+
+-- ─── EveryOneMinute — respawn if NPC was unloaded ─────────────────────────────
 
 local function onEveryMinute()
     local data   = WeData.getData()
     local active = data.activeSlot
-    local player = getSpecificPlayer(0)
-    if not player then return end
 
-    local weMD = ModData.getOrCreate("We")
-    if not weMD.residents then return end
-
-    for slotStr, resident in pairs(weMD.residents) do
-        local slotIndex = tonumber(slotStr)
-        if slotIndex ~= active then
-            local id = resident.id
-            -- If the zombie is no longer in our cache, request a respawn
-            if not WeNPC.Cache[id] then
-                local slot = data.slots[slotIndex]
-                if slot then slot.npcId = nil end   -- force re-spawn
-                local brain = resident.brain
-                if brain then
-                    local cell   = getCell()
-                    local square = cell and cell:getGridSquare(brain.homeX, brain.homeY, brain.homeZ or 0)
-                    if square then
-                        WeNPC.spawnForSlot(slotIndex)
-                    end
-                end
+    for i = 1, We.MAX_SLOTS do
+        if i ~= active and data.slots[i] and data.slots[i].x ~= nil then
+            if not WeNPC.Cache[i] then
+                WeNPC.spawnForSlot(i)
             end
         end
     end
@@ -233,7 +330,7 @@ end
 
 Events.EveryOneMinute.Add(onEveryMinute)
 
--- ─── OnReceiveGlobalModData — sync npcIds sent from server ────────────────────
+-- ─── OnReceiveGlobalModData — sync npcIds from server (MP zombie path) ────────
 
 local function onReceiveModData(key, gData)
     if key ~= "We" then return end
@@ -241,8 +338,9 @@ local function onReceiveModData(key, gData)
 
     local data = WeData.getData()
     for slotStr, resident in pairs(gData.residents) do
-        local slot = data.slots[tonumber(slotStr)]
-        if slot then slot.npcId = resident.id end
+        local slotIndex = tonumber(slotStr)
+        local slot = data.slots[slotIndex]
+        if slot then slot.npcId = slotIndex end
     end
 end
 
@@ -251,21 +349,31 @@ Events.OnReceiveGlobalModData.Add(onReceiveModData)
 -- ─── Init ──────────────────────────────────────────────────────────────────────
 
 function WeNPC.init()
-    -- Restore npcIds from our own global ModData (survives game reloads)
+    WeNPC.Cache         = {}
+    WeNPC.PendingDespawn = {}
+
+    local data   = WeData.getData()
+    local active = data.activeSlot
+
+    -- Clear stale npcIds: NPC players don't persist across game reloads.
+    -- The MP zombie path syncs them back below from ModData.
+    for i = 1, We.MAX_SLOTS do
+        if data.slots[i] then data.slots[i].npcId = nil end
+    end
+
+    -- MP zombie path: restore npcIds from server ModData
     local weMD = ModData.getOrCreate("We")
     if weMD.residents then
-        local data = WeData.getData()
         for slotStr, resident in pairs(weMD.residents) do
-            local slot = data.slots[tonumber(slotStr)]
-            if slot then slot.npcId = resident.id end
+            local slotIndex = tonumber(slotStr)
+            local slot = data.slots[slotIndex]
+            if slot then slot.npcId = slotIndex end
         end
     end
 
-    -- Spawn NPCs for inactive slots that don't have one yet
-    local data   = WeData.getData()
-    local active = data.activeSlot
+    -- Spawn NPCs for all inactive slots that have save data
     for i = 1, We.MAX_SLOTS do
-        if i ~= active and data.slots[i].x ~= nil and not data.slots[i].npcId then
+        if i ~= active and data.slots[i] and data.slots[i].x ~= nil then
             WeNPC.spawnForSlot(i)
         end
     end
