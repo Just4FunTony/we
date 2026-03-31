@@ -566,7 +566,18 @@ function WeRosterPanel:refreshRows()
 end
 
 function WeRosterPanel:update()
-    -- Refresh less frequently to avoid recreating moodle icons during hover.
+    -- Fast-path: keep active selected portrait live (clothes/moodles change in real time).
+    self._portraitTick = (self._portraitTick or 0) + 1
+    if self._portraitTick >= 20 then
+        self._portraitTick = 0
+        local selected = self.selectedPortraitSlot
+        local active = WeData.getActiveSlot()
+        if selected and selected == active and WeData.getSlot(selected) then
+            self:updatePortraitForSlot(selected)
+        end
+    end
+
+    -- Full row rebuild less frequently to avoid UI churn.
     self._tick = (self._tick or 0) + 1
     if self._tick >= 300 then
         self._tick = 0
