@@ -194,7 +194,16 @@ function WeCharCreate.randomize(player, slotIndex)
         local xpSys = player:getXp()
         for perk, level in pairs(xpBoosts) do
             if perk and level then
-                xpSys:AddXP(perk, level:intValue())
+                local perkType = perk
+                if type(perk) == "string" and Perks.FromString then
+                    perkType = Perks.FromString(perk)
+                elseif perk.getType then
+                    perkType = perk:getType()
+                end
+                local lvl = tonumber(level.intValue and level:intValue() or level) or 0
+                if perkType and lvl > 0 then
+                    pcall(xpSys.setXPToLevel, xpSys, perkType, lvl)
+                end
             end
         end
     end

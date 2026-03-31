@@ -8,7 +8,7 @@ We.HOME_SWITCH_RADIUS = 30   -- tiles radius around the custom home point
 
 -- Stat keys for save/load, paired with CharacterStat enum values (B42 API)
 We.STATS_KEYS = {
-    "Hunger", "Thirst", "Fatigue", "Boredom",
+    "Hunger", "Thirst", "Fatigue", "Endurance", "Boredom",
     "Stress", "Pain", "Unhappiness",
 }
 
@@ -18,6 +18,7 @@ function We.defaultSlot(index)
         name      = "Character " .. index,
         x         = nil, y = nil, z = nil,
         stats     = {},
+        moodles   = {},
         inventory = {},
         skills    = {},
 
@@ -39,6 +40,7 @@ function We.defaultSlot(index)
 
         -- Rolled character loadout (set on first use, nil until then)
         creation = nil,  -- {profession, positive={...}, negative={...}}
+        temperature = nil,
 
         -- Persistent outfit ID of the NPC zombie representing this character.
         -- nil when the character is active (being played by the player).

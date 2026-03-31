@@ -10,6 +10,7 @@ local STAT_ENUM = {
     Hunger      = CharacterStat.HUNGER,
     Thirst      = CharacterStat.THIRST,
     Fatigue     = CharacterStat.FATIGUE,
+    Endurance   = CharacterStat.ENDURANCE,
     Boredom     = CharacterStat.BOREDOM,
     Stress      = CharacterStat.STRESS,
     Pain        = CharacterStat.PAIN,
@@ -55,6 +56,81 @@ local function summarizeTraits(traits)
         out[#out + 1] = tostring(t)
     end
     return "[" .. table.concat(out, ", ") .. "]"
+end
+
+local function getPerkLevelSafe(player, perkObj, perkType)
+    local v1 = 0
+    local v2 = 0
+    if perkObj then
+        local ok1, r1 = pcall(player.getPerkLevel, player, perkObj)
+        if ok1 and r1 then v1 = tonumber(r1) or 0 end
+    end
+    if perkType then
+        local ok2, r2 = pcall(player.getPerkLevel, player, perkType)
+        if ok2 and r2 then v2 = tonumber(r2) or 0 end
+    end
+    return math.max(v1, v2)
+end
+
+local function getPerkXPSafe(xpSys, perkObj, perkType)
+    local v1 = 0
+    local v2 = 0
+    if perkObj then
+        local ok1, r1 = pcall(xpSys.getXP, xpSys, perkObj)
+        if ok1 and r1 then v1 = tonumber(r1) or 0 end
+    end
+    if perkType then
+        local ok2, r2 = pcall(xpSys.getXP, xpSys, perkType)
+        if ok2 and r2 then v2 = tonumber(r2) or 0 end
+    end
+    return math.max(v1, v2)
+end
+
+local function applySavedSkillsForSlot(player, slot)
+    if not player or not slot then return end
+    local xpSys = player:getXp()
+    for i = 1, Perks.getMaxIndex() do
+        local perkType = Perks.fromIndex(i - 1)
+        local perk = PerkFactory.getPerk(perkType)
+        if perk and perk:getParent() ~= Perks.None then
+            local perkKey = tostring(perkType or perk)
+            local saved = (slot.skillsByName and slot.skillsByName[perkKey])
+                or (slot.skills and (slot.skills[tostring(i - 1)] or slot.skills[i - 1]))
+            if not saved and slot.skillsList then
+                for _, entry in ipairs(slot.skillsList) do
+                    if entry and (entry.perk == perkKey or tonumber(entry.idx) == (i - 1)) then
+                        saved = entry
+                        break
+                    end
+                end
+            end
+            if saved then
+                pcall(player.setPerkLevelDebug, player, perkType, saved.level or 0)
+                pcall(xpSys.setXPToLevel, xpSys, perkType, saved.level or 0)
+                if saved.xp ~= nil then
+                    local curXP = getPerkXPSafe(xpSys, perkType, perkType)
+                    local delta = (saved.xp or 0) - (curXP or 0)
+                    if delta > 0 then
+                        pcall(xpSys.AddXP, xpSys, perkType, delta, false, false, false, false)
+                    end
+                end
+            end
+        end
+    end
+end
+
+local pendingSkillRestore = nil
+local function onTickReapplySkills()
+    if not pendingSkillRestore then return end
+    pendingSkillRestore.ticks = pendingSkillRestore.ticks - 1
+    if pendingSkillRestore.ticks > 0 then return end
+    local player = getSpecificPlayer(0)
+    local data = WeData and WeData.getData and WeData.getData()
+    local slot = data and data.slots and data.slots[pendingSkillRestore.slotIndex]
+    if player and slot then
+        applySavedSkillsForSlot(player, slot)
+    end
+    pendingSkillRestore = nil
 end
 
 local function applyTraitsLocally(player, professionRL, traitNames, sourceLabel)
@@ -177,6 +253,17 @@ function WeData.init()
                     end
                     local desc = player:getDescriptor()
                     if desc then
+                        -- Seed default slot name from descriptor once (for legacy saves where
+                        -- slot still has "Character N"). Keep stable afterwards.
+                        local curName = tostring(slot.name or "")
+                        if curName == "" or curName == ("Character " .. tostring(data.activeSlot)) then
+                            local fore = desc:getForename() or ""
+                            local sur  = desc:getSurname() or ""
+                            local full = (fore .. " " .. sur):match("^%s*(.-)%s*$")
+                            if full and full ~= "" then
+                                slot.name = full
+                            end
+                        end
                         local prof = desc:getCharacterProfession()
                         if prof then slot.profession = tostring(prof) end
                     end
@@ -319,14 +406,33 @@ function WeData.saveSlot(index)
     slot.x = player:getX()
     slot.y = player:getY()
     slot.z = player:getZ()
+    slot.temperature = player.getTemperature and player:getTemperature() or slot.temperature
 
     -- Stats (B42 API: stats:get(CharacterStat.X))
     for _, key in ipairs(We.STATS_KEYS) do
         local statEnum = STAT_ENUM[key]
         if statEnum then
-            slot.stats[key] = stats:get(statEnum)
+            slot.stats[key] = tonumber(stats:get(statEnum)) or 0
         end
     end
+
+    -- Save current moodle levels for accurate inactive-slot UI.
+    local moodles = player:getMoodles()
+    slot.moodles = {
+        Hungry = moodles and (moodles:getMoodleLevel(MoodleType.HUNGRY) or 0) or 0,
+        Thirst = moodles and (moodles:getMoodleLevel(MoodleType.THIRST) or 0) or 0,
+        Endurance = moodles and (moodles:getMoodleLevel(MoodleType.ENDURANCE) or 0) or 0,
+        Tired  = moodles and (moodles:getMoodleLevel(MoodleType.TIRED) or 0) or 0,
+        Stress = moodles and (moodles:getMoodleLevel(MoodleType.STRESS) or 0) or 0,
+        Pain   = moodles and (moodles:getMoodleLevel(MoodleType.PAIN) or 0) or 0,
+        Bored  = moodles and (moodles:getMoodleLevel(MoodleType.BORED) or 0) or 0,
+        Unhappy = moodles and (moodles:getMoodleLevel(MoodleType.UNHAPPY) or 0) or 0,
+        Panic = moodles and (moodles:getMoodleLevel(MoodleType.PANIC) or 0) or 0,
+        Sick = moodles and (moodles:getMoodleLevel(MoodleType.SICK) or 0) or 0,
+        Hyperthermia = moodles and (moodles:getMoodleLevel(MoodleType.HYPERTHERMIA) or 0) or 0,
+        Hypothermia = moodles and (moodles:getMoodleLevel(MoodleType.HYPOTHERMIA) or 0) or 0,
+        HeavyLoad = moodles and (moodles:getMoodleLevel(MoodleType.HEAVY_LOAD) or 0) or 0,
+    }
 
     -- Inventory
     slot.inventory = {}
@@ -360,14 +466,25 @@ function WeData.saveSlot(index)
         end
     end
 
-    -- Skills
+    -- Skills (store as sequential list for serialization stability)
     slot.skills = {}
-    for i = 0, Perks.getMaxIndex() - 1 do
-        local perk = Perks.fromIndex(i)
-        slot.skills[i] = {
-            level = player:getPerkLevel(perk),
-            xp    = xpSys:getXP(perk),
-        }
+    slot.skillsByName = {}
+    slot.skillsList = {}
+    for i = 1, Perks.getMaxIndex() do
+        local perkType = Perks.fromIndex(i - 1)
+        local perk = PerkFactory.getPerk(perkType)
+        if perk and perk:getParent() ~= Perks.None then
+            local perkKey = tostring(perkType or perk)
+            local skillEntry = {
+                level = getPerkLevelSafe(player, perkType, perkType),
+                xp    = getPerkXPSafe(xpSys, perkType, perkType),
+                perk  = perkKey,
+                idx   = i - 1,
+            }
+            slot.skills[tostring(i - 1)] = skillEntry
+            slot.skillsByName[perkKey] = skillEntry
+            table.insert(slot.skillsList, skillEntry)
+        end
     end
 
     -- Body damage state
@@ -471,13 +588,17 @@ function WeData.loadSlot(index)
     local stats = player:getStats()
     local xpSys = player:getXp()
 
-    -- Stats (B42 API: stats:set(CharacterStat.X, value))
-    for _, key in ipairs(We.STATS_KEYS) do
-        local statEnum = STAT_ENUM[key]
-        if statEnum and slot.stats[key] then
-            stats:set(statEnum, slot.stats[key])
+    local function applySavedStats()
+        for _, key in ipairs(We.STATS_KEYS) do
+            local statEnum = STAT_ENUM[key]
+            if statEnum and slot.stats[key] ~= nil then
+                stats:set(statEnum, tonumber(slot.stats[key]) or 0)
+            end
         end
     end
+
+    -- Stats (B42 API: stats:set(CharacterStat.X, value))
+    applySavedStats()
 
     -- Position
     player:setX(slot.x)
@@ -538,14 +659,7 @@ function WeData.loadSlot(index)
     end
 
     -- Skills
-    for i = 0, Perks.getMaxIndex() - 1 do
-        local perk  = Perks.fromIndex(i)
-        local saved = slot.skills[i]
-        if saved then
-            player:setPerkLevelDebug(perk, saved.level)
-            xpSys:setXPToLevel(perk, saved.level)
-        end
-    end
+    applySavedSkillsForSlot(player, slot)
 
     -- Profession + traits: always route through server.
     -- SP: server applies to the server-side player and refreshes the Info panel directly.
@@ -599,6 +713,32 @@ function WeData.loadSlot(index)
         panel.charScreen.refreshNeeded = true
     end
 
+    -- Re-apply stats after inventory/trait/model updates to avoid engine overwrites on load.
+    applySavedStats()
+    -- Re-apply skills after trait/profession updates that may touch perk state.
+    applySavedSkillsForSlot(player, slot)
+    pendingSkillRestore = { slotIndex = index, ticks = 10 }
+    if slot.temperature ~= nil and player.setTemperature then
+        player:setTemperature(slot.temperature)
+    end
+    local moodlesNow = player:getMoodles()
+    slot.moodles = slot.moodles or {}
+    if moodlesNow then
+        slot.moodles.Hungry = moodlesNow:getMoodleLevel(MoodleType.HUNGRY) or 0
+        slot.moodles.Thirst = moodlesNow:getMoodleLevel(MoodleType.THIRST) or 0
+        slot.moodles.Endurance = moodlesNow:getMoodleLevel(MoodleType.ENDURANCE) or 0
+        slot.moodles.Tired = moodlesNow:getMoodleLevel(MoodleType.TIRED) or 0
+        slot.moodles.Stress = moodlesNow:getMoodleLevel(MoodleType.STRESS) or 0
+        slot.moodles.Pain = moodlesNow:getMoodleLevel(MoodleType.PAIN) or 0
+        slot.moodles.Bored = moodlesNow:getMoodleLevel(MoodleType.BORED) or 0
+        slot.moodles.Unhappy = moodlesNow:getMoodleLevel(MoodleType.UNHAPPY) or 0
+        slot.moodles.Panic = moodlesNow:getMoodleLevel(MoodleType.PANIC) or 0
+        slot.moodles.Sick = moodlesNow:getMoodleLevel(MoodleType.SICK) or 0
+        slot.moodles.Hyperthermia = moodlesNow:getMoodleLevel(MoodleType.HYPERTHERMIA) or 0
+        slot.moodles.Hypothermia = moodlesNow:getMoodleLevel(MoodleType.HYPOTHERMIA) or 0
+        slot.moodles.HeavyLoad = moodlesNow:getMoodleLevel(MoodleType.HEAVY_LOAD) or 0
+    end
+
     print("[We] Slot " .. index .. " loaded.")
 end
 
@@ -643,7 +783,18 @@ function WeData.switchTo(index)
 
     WeData.saveSlot(prev)
 
-    if data.slots[index].npcId then
+    -- Entering this character: always try to use resident's live location.
+    local targetResidentX, targetResidentY, targetResidentZ =
+        WeNPC.getResidentPosition and WeNPC.getResidentPosition(index)
+    if targetResidentX and targetResidentY then
+        data.slots[index].x = targetResidentX
+        data.slots[index].y = targetResidentY
+        data.slots[index].z = targetResidentZ or data.slots[index].z or 0
+        print("[We] switchTo: updated target slot " .. index .. " position from resident (" ..
+            tostring(targetResidentX) .. "," .. tostring(targetResidentY) .. "," .. tostring(targetResidentZ) .. ")")
+    end
+
+    if data.slots[index].npcId or targetResidentX then
         WeNPC.despawnForSlot(index)
     end
 
@@ -680,7 +831,7 @@ function WeData.switchTo(index)
                 if statEnum then slot.stats[key] = s:get(statEnum) end
             end
             slot.appearance = WeNPC.captureAppearance(player)
-            WeCharCreate.showPopup(summary)
+            -- No creation popup by request.
         end
         print("[We] New character created for slot " .. index)
     else
@@ -705,6 +856,7 @@ local function onSave()
 end
 
 Events.OnSave.Add(onSave)
+Events.OnTick.Add(onTickReapplySkills)
 
 -- ─── OnServerCommand — receive traitsApplied confirmation from server ──────────
 

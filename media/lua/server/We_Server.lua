@@ -197,14 +197,15 @@ local function onClientCommand(module, command, player, args)
                 end
             end
 
-            -- Remove stale/hostile zombie that occupies the same spawn point.
+            -- Remove stale/hostile zombie that occupies resident spawn area.
             -- This prevents "extra zombie on NPC spot" after reconnect/load.
             for i = zList:size() - 1, 0, -1 do
                 local z = zList:get(i)
                 if z and not z:isDead() then
                     local sameZ = math.floor(z:getZ() or 0) == math.floor(args.z or 0)
-                    local close = math.abs((z:getX() or 0) - x) <= 0.30
-                               and math.abs((z:getY() or 0) - y) <= 0.30
+                    local dx = (z:getX() or 0) - x
+                    local dy = (z:getY() or 0) - y
+                    local close = (dx * dx + dy * dy) <= (1.5 * 1.5)
                     if sameZ and close then
                         local zmd = z:getModData()
                         local zBrain = zmd and zmd.weBrain

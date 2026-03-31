@@ -32,6 +32,34 @@ function WeRosterPanel:new(x, y, w, h)
     return o
 end
 
+local function getLiveStatsForSlot(slotIndex, slot)
+    local active = WeData.getActiveSlot()
+    if slotIndex ~= active then
+        return slot and slot.stats or {}
+    end
+    local player = getSpecificPlayer(0)
+    if not player then
+        return slot and slot.stats or {}
+    end
+    local stats = player:getStats()
+    local live = {
+        Hunger      = stats:get(CharacterStat.HUNGER),
+        Thirst      = stats:get(CharacterStat.THIRST),
+        Fatigue     = stats:get(CharacterStat.FATIGUE),
+        Boredom     = stats:get(CharacterStat.BOREDOM),
+        Stress      = stats:get(CharacterStat.STRESS),
+        Pain        = stats:get(CharacterStat.PAIN),
+        Unhappiness = stats:get(CharacterStat.UNHAPPINESS),
+    }
+    if slot then
+        slot.stats = slot.stats or {}
+        for k, v in pairs(live) do
+            slot.stats[k] = v
+        end
+    end
+    return live
+end
+
 -- Returns [{slotIndex, isAddRow}] — used slots + one empty slot (unless full)
 function WeRosterPanel:getVisibleSlots()
     local data   = WeData.getData()
@@ -161,10 +189,7 @@ function WeRosterPanel:initialise()
             -- Status line
             local statusText, sr, sg, sb
             if slotIndex == active then
-                local s = slot.stats
-                statusText = string.format(
-                    "Hunger:%.0f%%  Thirst:%.0f%%  Fatigue:%.0f%%",
-                    (s.Hunger or 0)*100, (s.Thirst or 0)*100, (s.Fatigue or 0)*100)
+                statusText = ""
                 sr, sg, sb = 0.6, 0.8, 0.6
             elseif slot.npcId then
                 statusText = We.getText("UI_We_NPC_AtHome")
@@ -249,14 +274,6 @@ function WeRosterPanel:initialise()
     self.removeHomeBtn.backgroundColorMouseOver = {r=0.65, g=0.15, b=0.15, a=1}
     self:addChild(self.removeHomeBtn)
 
-    -- "Reset traits" debug button — clears slot.traits so init re-captures from player
-    local resetX = PANEL_W - 160 - PADDING
-    self.resetTraitsBtn = ISButton:new(resetX, removeY, 160, BTN_H,
-        "Reset traits [debug]", self, WeRosterPanel.onResetTraits)
-    self.resetTraitsBtn.backgroundColor          = {r=0.30, g=0.10, b=0.35, a=1}
-    self.resetTraitsBtn.backgroundColorMouseOver = {r=0.50, g=0.15, b=0.55, a=1}
-    self:addChild(self.resetTraitsBtn)
-
     self:refreshRows()
 end
 
@@ -338,36 +355,77 @@ function WeRosterPanel:addProfessionIcon(slot)
     self.profIcon = img
 end
 
-function WeRosterPanel:addMoodleIcons(slot)
+function WeRosterPanel:addMoodleIcons(slot, slotIndex)
     self:clearMoodleIcons()
     if not slot then return end
 
     local moodleDefs = {
-        { key = "Hunger",  stat = CharacterStat.HUNGER,   good = false },
-        { key = "Thirst",  stat = CharacterStat.THIRST,   good = false },
-        { key = "Fatigue", stat = CharacterStat.FATIGUE,  good = false },
-        { key = "Stress",  stat = CharacterStat.STRESS,   good = false },
-        { key = "Pain",    stat = CharacterStat.PAIN,     good = false },
-        { key = "Boredom", stat = CharacterStat.BOREDOM,  good = false },
+        { key = "Hungry", text = "Hunger", mt = MoodleType.HUNGRY, stat = "Hunger", textureKeys = {"Hungry"} },
+        { key = "Thirst", text = "Thirst", mt = MoodleType.THIRST, stat = "Thirst", textureKeys = {"Thirst", "Thirsty"} },
+        { key = "Endurance", text = "Exertion", mt = MoodleType.ENDURANCE, stat = "Endurance", textureKeys = {"Endurance", "HeavyLoad"} },
+        { key = "Tired", text = "Fatigue", mt = MoodleType.TIRED, stat = "Fatigue", textureKeys = {"Tired"} },
+        { key = "Stress", text = "Stress", mt = MoodleType.STRESS, stat = "Stress", textureKeys = {"Stress"} },
+        { key = "Pain", text = "Pain", mt = MoodleType.PAIN, stat = "Pain", textureKeys = {"Pain"} },
+        { key = "Bored", text = "Boredom", mt = MoodleType.BORED, stat = "Boredom", textureKeys = {"Bored", "Unhappy"} },
+        { key = "Unhappy", text = "Unhappy", mt = MoodleType.UNHAPPY, textureKeys = {"Unhappy", "Bored"} },
+        { key = "Panic", text = "Panic", mt = MoodleType.PANIC, textureKeys = {"Panic"} },
+        { key = "Sick", text = "Sick", mt = MoodleType.SICK, textureKeys = {"Sick"} },
+        { key = "Hyperthermia", text = "Hyperthermia", mt = MoodleType.HYPERTHERMIA, textureKeys = {"Hyperthermia"} },
+        { key = "Hypothermia", text = "Hypothermia", mt = MoodleType.HYPOTHERMIA, textureKeys = {"Hypothermia", "Cold"} },
+        { key = "HeavyLoad", text = "Heavy Load", mt = MoodleType.HEAVY_LOAD, textureKeys = {"HeavyLoad", "Endurance"} },
     }
+
+    local function getMoodleTexture(def)
+        for _, k in ipairs(def.textureKeys or {}) do
+            local tx = getTexture("media/ui/Moodles/Moodle_Icon_" .. tostring(k) .. ".png")
+            if tx then return tx end
+        end
+        return FALLBACK_ICON
+    end
 
     local x = self.portraitPanel.x
     local y = self.moodlesLabel.y + 18
     local size = 16
     local spacing = 2
     local idx = 0
+    local active = WeData.getActiveSlot()
+    local player = getSpecificPlayer(0)
+    local moodles = player and player:getMoodles()
     for _, m in ipairs(moodleDefs) do
-        local raw = slot.stats and slot.stats[m.key] or nil
-        local value = tonumber(raw or 0) or 0
-        if value > 0.05 then
-            local texture = getTexture("media/ui/Moodles/Moodle_Icon_" .. m.key .. ".png") or FALLBACK_ICON
+        local level = 0
+        if slotIndex == active and moodles and m.mt then
+            level = moodles:getMoodleLevel(m.mt) or 0
+        else
+            local savedMoodles = slot.moodles or {}
+            if savedMoodles[m.key] ~= nil then
+                level = tonumber(savedMoodles[m.key]) or 0
+            else
+                local s = getLiveStatsForSlot(slotIndex or -1, slot)
+                local raw = s and s[m.stat] or nil
+                local value = tonumber(raw or 0) or 0
+                if m.stat == "Endurance" then
+                    value = 1 - value
+                end
+                if value > 0 then
+                    level = math.max(1, math.min(4, math.floor(value * 4 + 0.5)))
+                end
+            end
+        end
+        if slotIndex == active and m.key == "Hypothermia" and level <= 0 and player and player.getTemperature then
+            local t = player:getTemperature()
+            if t and t < 35.5 then level = 1 end
+        end
+        if level > 0 then
+            local texture = getMoodleTexture(m)
             local col = idx % 7
             local row = math.floor(idx / 7)
-            local img = ISImage:new(x + col * (size + spacing), y + row * (size + spacing), size, size, texture)
+            local ix = x + col * (size + spacing)
+            local iy = y + row * (size + spacing)
+            local img = ISImage:new(ix, iy, size, size, texture)
             img:initialise()
             img:setVisible(true)
             if img.setMouseOverText then
-                img:setMouseOverText(m.key .. ": " .. tostring(math.floor(value * 100)) .. "%")
+                img:setMouseOverText(m.text .. " Lv." .. tostring(level))
             end
             self:addChild(img)
             self.moodleIcons[#self.moodleIcons + 1] = img
@@ -459,7 +517,7 @@ function WeRosterPanel:updatePortraitForSlot(slotIndex)
     local traitRows = math.max(1, math.ceil(traitCount / 3))
     self.moodlesLabel:setY(self.perksLabel.y + 20 + traitRows * 18 + 4)
     self.moodlesLabel.name = "Moodles"
-    self:addMoodleIcons(slot)
+    self:addMoodleIcons(slot, slotIndex)
 end
 
 function WeRosterPanel:refreshRows()
@@ -508,9 +566,9 @@ function WeRosterPanel:refreshRows()
 end
 
 function WeRosterPanel:update()
-    -- Refresh button states every 30 frames so changes apply live
+    -- Refresh less frequently to avoid recreating moodle icons during hover.
     self._tick = (self._tick or 0) + 1
-    if self._tick >= 30 then
+    if self._tick >= 300 then
         self._tick = 0
         self:refreshRows()
     end
@@ -518,25 +576,6 @@ end
 
 function WeRosterPanel:render()
     ISPanel.render(self)
-end
-
--- Clears slot.traits and slot.profession for all slots.
--- On next game load, WeData.init() will re-capture traits from each character's live state.
--- Use this when traits appear corrupted (e.g. all slots show the same traits).
-function WeRosterPanel:onResetTraits()
-    local data = WeData.getData()
-    for i = 1, We.MAX_SLOTS do
-        local slot = data.slots[i]
-        if slot then
-            slot.traits     = {}
-            slot.profession = nil
-        end
-    end
-    local player = getSpecificPlayer(0)
-    if player then
-        HaloTextHelper.addText(player, "We: traits reset — reload the save to re-capture")
-    end
-    print("[We] Traits reset for all slots. Reload the save to re-capture from player state.")
 end
 
 function WeRosterPanel:onRemoveHome()

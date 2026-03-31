@@ -192,6 +192,34 @@ function WeNPC.despawnForSlot(slotIndex)
     print("[We] Despawned NPC for slot " .. slotIndex)
 end
 
+-- Returns resident world position for a slot when available.
+-- Used by character switch to spawn at NPC's current location, not stale saved one.
+function WeNPC.getResidentPosition(slotIndex)
+    local npc = WeNPC.Cache[slotIndex]
+    if npc and npc ~= "pending" and npc.getX and npc.getY and npc.getZ then
+        return npc:getX(), npc:getY(), npc:getZ()
+    end
+
+    local cell = getCell()
+    if not cell then return nil end
+    local zList = cell:getZombieList()
+    for i = 0, zList:size() - 1 do
+        local z = zList:get(i)
+        if z and not z:isDead() then
+            local zmd = z:getModData()
+            local brain = zmd and zmd.weBrain
+            local sameSlot = zmd and (
+                zmd.weSlot == slotIndex
+                or (brain and brain.slotIndex == slotIndex)
+            )
+            if sameSlot then
+                return z:getX(), z:getY(), z:getZ()
+            end
+        end
+    end
+    return nil
+end
+
 -- ─── OnZombieUpdate — per-tick maintenance for server-side zombie NPCs (MP) ──
 
 local function onZombieUpdate(zombie)
@@ -272,21 +300,28 @@ local function onZombieUpdate(zombie)
     zombie:setTarget(nil)
     if zombie.setTargetSeenTime then zombie:setTargetSeenTime(0) end
 
+    -- Persist resident's live location as the authoritative character location.
+    -- This allows switching into the character at the NPC's current position.
+    local zx, zy, zz = zombie:getX(), zombie:getY(), zombie:getZ()
+    if math.abs((brain.homeX or zx) - zx) > 0.10 or math.abs((brain.homeY or zy) - zy) > 0.10
+            or math.abs((brain.homeZ or zz) - zz) > 0.10 then
+        brain.homeX, brain.homeY, brain.homeZ = zx, zy, zz
+        local data = getDataSafe("onZombieUpdate.persistPos")
+        if data and data.slots and data.slots[brain.slotIndex] then
+            local slot = data.slots[brain.slotIndex]
+            slot.x, slot.y, slot.z = zx, zy, zz
+        end
+    end
+
     -- Re-apply visuals if lost after cell reload
     if not brain.visualsApplied and brain.appearance then
         WeNPC.applyVisuals(zombie, brain.appearance)
         brain.visualsApplied = true
     end
 
-    -- Prevent wandering: snap back if more than 3 tiles from home
-    if brain.homeX then
-        local dx = zombie:getX() - brain.homeX
-        local dy = zombie:getY() - brain.homeY
-        if dx * dx + dy * dy > 9 then
-            zombie:setX(brain.homeX)
-            zombie:setY(brain.homeY)
-            zombie:setZ(brain.homeZ or 0)
-        end
+    -- Keep zombie on floor and avoid random vertical glitches.
+    if brain.homeZ and math.abs((zombie:getZ() or 0) - brain.homeZ) > 0.01 then
+        zombie:setZ(brain.homeZ)
     end
 end
 
