@@ -69,27 +69,21 @@ local function applyTraitsToCollections(player, traitsList)
         end
     end
 
-    local knownTraits = player:getCharacterTraits():getKnownTraits()
-    knownTraits:clear()
+    local charTraits = player:getCharacterTraits()
+    local knownTraits = charTraits:getKnownTraits()
+    local toRemove = {}
+    for i = 0, knownTraits:size() - 1 do
+        local t = knownTraits:get(i)
+        if t then
+            toRemove[#toRemove + 1] = t
+        end
+    end
+    for _, t in ipairs(toRemove) do
+        pcall(charTraits.remove, charTraits, t)
+    end
     for _, traitType in ipairs(traitEnums) do
-        knownTraits:add(traitType)
+        pcall(charTraits.add, charTraits, traitType)
         applied = applied + 1
-    end
-
-    if player.hasTrait and player.removeTrait then
-        local defs = CharacterTraitDefinition.getTraits()
-        for i = 0, defs:size() - 1 do
-            local def = defs:get(i)
-            local traitType = def and def:getType()
-            if traitType and player:hasTrait(traitType) then
-                pcall(player.removeTrait, player, traitType)
-            end
-        end
-    end
-    if player.addTrait then
-        for _, traitType in ipairs(traitEnums) do
-            pcall(player.addTrait, player, traitType)
-        end
     end
 
     -- B42 may use a separate runtime trait collection for gameplay checks/UI.

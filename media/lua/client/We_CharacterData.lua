@@ -69,31 +69,28 @@ local function applyTraitsLocally(player, professionRL, traitNames, sourceLabel)
     end
 
     local traitEnums = {}
-    local knownTraits = player:getCharacterTraits():getKnownTraits()
-    knownTraits:clear()
+    local charTraits = player:getCharacterTraits()
+    local knownTraits = charTraits:getKnownTraits()
     for _, traitName in ipairs(traitNames or {}) do
         local traitType = CharacterTrait.get(ResourceLocation.of(traitName))
         if traitType then
             traitEnums[#traitEnums + 1] = traitType
-            knownTraits:add(traitType)
         end
     end
 
-    -- B42: some runtime checks rely on player trait flags, not only knownTraits.
-    if player.hasTrait and player.removeTrait then
-        local defs = CharacterTraitDefinition.getTraits()
-        for i = 0, defs:size() - 1 do
-            local def = defs:get(i)
-            local traitType = def and def:getType()
-            if traitType and player:hasTrait(traitType) then
-                pcall(player.removeTrait, player, traitType)
-            end
+    -- B42 canonical path: mutate CharacterTraits object via remove/add.
+    local toRemove = {}
+    for i = 0, knownTraits:size() - 1 do
+        local t = knownTraits:get(i)
+        if t then
+            toRemove[#toRemove + 1] = t
         end
     end
-    if player.addTrait then
-        for _, traitType in ipairs(traitEnums) do
-            pcall(player.addTrait, player, traitType)
-        end
+    for _, t in ipairs(toRemove) do
+        pcall(charTraits.remove, charTraits, t)
+    end
+    for _, t in ipairs(traitEnums) do
+        pcall(charTraits.add, charTraits, t)
     end
 
     -- Keep this too for UI/systems reading the raw trait collection.
