@@ -25,5 +25,11 @@
     "UI_We_BaseMenu_StartAs": "Start playing as: %1",
 
     "UI_We_Tab_Faction": "Faction",
-    "UI_We_Tab_Characters": "Characters"
+    "UI_We_Tab_Characters": "Characters",
+    "UI_We_Kick": "Dismiss",
+    "UI_We_Kick_Confirm": "Are you sure you want to dismiss %1?",
+    "UI_We_Kick_Done": "Character dismissed: %1",
+    "UI_We_Portrait_Profession": "Profession:",
+    "UI_We_Portrait_Perks": "Perks:",
+    "UI_We_Portrait_None": "none"
 }

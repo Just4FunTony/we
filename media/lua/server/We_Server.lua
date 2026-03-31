@@ -116,6 +116,57 @@ local function onClientCommand(module, command, player, args)
             return
         end
 
+        -- Hard dedup by persistent resident registry.
+        -- On reconnect/reload client may request spawn again while resident for this slot
+        -- already exists in the world (possibly currently unloaded).
+        local weMD = ModData.getOrCreate("We")
+        if not weMD.residents then weMD.residents = {} end
+        local existingResident = weMD.residents[tostring(slotIndex)]
+        if existingResident then
+            -- If loaded right now, refresh its brain/appearance; otherwise keep persisted one.
+            local cell = getCell()
+            local updatedLoaded = false
+            if cell then
+                local zList = cell:getZombieList()
+                for i = 0, zList:size() - 1 do
+                    local z = zList:get(i)
+                    local zmd = z and z:getModData()
+                    local zBrain = zmd and zmd.weBrain
+                    local sameSlot = zmd and (
+                        zmd.weSlot == slotIndex
+                        or (zBrain and zBrain.slotIndex == slotIndex)
+                    )
+                    if z and sameSlot and not z:isDead() then
+                        local brain = args.brain or existingResident.brain
+                        if brain then
+                            zmd.weSlot = slotIndex
+                            z:getModData().weBrain = brain
+                            z:setVariable("WeResident", true)
+                            z:setTarget(nil)
+                            if z.setTargetSeenTime then z:setTargetSeenTime(0) end
+                            applyAppearance(z, brain.appearance)
+                            existingResident.brain = brain
+                        end
+                        updatedLoaded = true
+                        break
+                    end
+                end
+            end
+            if updatedLoaded then
+                weMD.residents[tostring(slotIndex)] = existingResident
+                ModData.transmit("We")
+                print("[We] spawnResident: skipped duplicate for slot=" .. tostring(slotIndex)
+                    .. " loadedUpdated=" .. tostring(updatedLoaded))
+                return
+            end
+
+            -- Stale resident registry entry (no actual zombie loaded for this slot).
+            -- Drop stale record and proceed with a fresh spawn to avoid hostile/default zombie fallback.
+            weMD.residents[tostring(slotIndex)] = nil
+            ModData.transmit("We")
+            print("[We] spawnResident: stale resident cleared for slot=" .. tostring(slotIndex) .. ", spawning fresh")
+        end
+
         -- Deduplicate by slot: on load the client can request spawn while resident
         -- already exists in-world/persisted ModData.
         local cell = getCell()
@@ -123,18 +174,50 @@ local function onClientCommand(module, command, player, args)
             local zList = cell:getZombieList()
             for i = 0, zList:size() - 1 do
                 local z = zList:get(i)
-                if z and z:getModData().weSlot == slotIndex and not z:isDead() then
+                local zmd = z and z:getModData()
+                local zBrain = zmd and zmd.weBrain
+                local sameSlot = zmd and (
+                    zmd.weSlot == slotIndex
+                    or (zBrain and zBrain.slotIndex == slotIndex)
+                )
+                if z and sameSlot and not z:isDead() then
                     local brain = args.brain
                     if brain then
+                        zmd.weSlot = slotIndex
                         z:getModData().weBrain = brain
+                        z:setVariable("WeResident", true)
+                        z:setTarget(nil)
+                        if z.setTargetSeenTime then z:setTargetSeenTime(0) end
                         applyAppearance(z, brain.appearance)
                     end
-                    local weMD = ModData.getOrCreate("We")
-                    if not weMD.residents then weMD.residents = {} end
                     weMD.residents[tostring(slotIndex)] = {slotIndex = slotIndex, brain = brain}
                     ModData.transmit("We")
                     print("[We] spawnResident: dedup hit, resident already exists for slot=" .. tostring(slotIndex))
                     return
+                end
+            end
+
+            -- Remove stale/hostile zombie that occupies the same spawn point.
+            -- This prevents "extra zombie on NPC spot" after reconnect/load.
+            for i = zList:size() - 1, 0, -1 do
+                local z = zList:get(i)
+                if z and not z:isDead() then
+                    local sameZ = math.floor(z:getZ() or 0) == math.floor(args.z or 0)
+                    local close = math.abs((z:getX() or 0) - x) <= 0.30
+                               and math.abs((z:getY() or 0) - y) <= 0.30
+                    if sameZ and close then
+                        local zmd = z:getModData()
+                        local zBrain = zmd and zmd.weBrain
+                        local sameSlot = zmd and (
+                            zmd.weSlot == slotIndex
+                            or (zBrain and zBrain.slotIndex == slotIndex)
+                        )
+                        if not sameSlot then
+                            z:removeFromWorld()
+                            z:removeFromSquare()
+                            print("[We] spawnResident: removed stale zombie at spawn point for slot=" .. tostring(slotIndex))
+                        end
+                    end
                 end
             end
         end

@@ -1,6 +1,7 @@
 -- We: Faction tab integration
 -- Hooks the Faction button in ISUserPanelUI to open a tabbed window that
 -- contains both the standard Faction panel and our Characters roster.
+require "ISUI/ISUI3DModel"
 
 local PANEL_W  = 520
 local VIEW_H   = 450
@@ -10,9 +11,14 @@ local PANEL_H  = TAB_H + VIEW_H
 local PADDING  = 10
 local ROW_H    = 58
 local BTN_W    = 80
+local BTN_KICK_W = 74
 local BTN_H    = 28
 local STATUS_H = 26    -- fixed status bar at top
 local REMOVE_H = BTN_H + 16  -- reserved height at bottom for remove button
+local PORTRAIT_W = 130
+local PORTRAIT_H = 190
+local HOVER_ICON = getTexture("media/ui/ArrowRight.png")
+local FALLBACK_ICON = getTexture("media/ui/ArrowRight.png")
 
 -- ─── WeRosterPanel ────────────────────────────────────────────────────────────
 -- Shows only used character slots + one empty "Create" row, up to MAX_SLOTS.
@@ -46,6 +52,7 @@ end
 
 function WeRosterPanel:initialise()
     ISPanel.initialise(self)
+    self.moveWithMouse = true
 
     -- Fixed status label at top
     self.baseStatusLabel = ISLabel:new(PADDING, 6, 14, "", 1, 1, 1, 1, UIFont.Small, true)
@@ -53,12 +60,51 @@ function WeRosterPanel:initialise()
 
     -- Scrollable slot list
     local listH = self.height - STATUS_H - REMOVE_H
-    self.slotList = ISScrollingListBox:new(0, STATUS_H, self.width, listH)
+    local listW = self.width - PORTRAIT_W - PADDING - 8
+    self.slotList = ISScrollingListBox:new(0, STATUS_H, listW, listH)
     self.slotList.font        = UIFont.Small
     self.slotList.itemheight  = ROW_H
     self.slotList.drawBorder  = false
     self.slotList.backgroundColor = {r=0, g=0, b=0, a=0}
     self.slotList.rosterPanel = self
+
+    -- Portrait (selected slot)
+    if ISCharacterScreenAvatar then
+        self.portraitPanel = ISCharacterScreenAvatar:new(
+            self.slotList.width + 8,
+            STATUS_H + 4,
+            PORTRAIT_W,
+            PORTRAIT_H
+        )
+    else
+        self.portraitPanel = ISUI3DModel:new(
+            self.slotList.width + 8,
+            STATUS_H + 4,
+            PORTRAIT_W,
+            PORTRAIT_H
+        )
+    end
+    self.portraitPanel:initialise()
+    self.portraitPanel:instantiate()
+    self.portraitPanel:setVisible(true)
+    self:addChild(self.portraitPanel)
+    self.portraitPanel:setState("idle")
+    self.portraitPanel:setDirection(IsoDirections.S)
+    self.portraitPanel:setIsometric(false)
+    if self.portraitPanel.setDoRandomExtAnimations then self.portraitPanel:setDoRandomExtAnimations(true) end
+    if self.portraitPanel.setZoom then self.portraitPanel:setZoom(14) end
+    if self.portraitPanel.setYOffset then self.portraitPanel:setYOffset(-0.85) end
+
+    self.profLabel = ISLabel:new(self.portraitPanel.x, self.portraitPanel.y + PORTRAIT_H + 8, 16, We.getText("UI_We_Portrait_Profession"), 0.95, 0.85, 0.35, 1, UIFont.Small, true)
+    self:addChild(self.profLabel)
+    self.perksLabel = ISLabel:new(self.portraitPanel.x, self.profLabel.y + 24, 16, We.getText("UI_We_Portrait_Perks"), 0.75, 0.90, 0.75, 1, UIFont.Small, true)
+    self:addChild(self.perksLabel)
+    self.moodlesLabel = ISLabel:new(self.portraitPanel.x, self.perksLabel.y + 38, 16, "Moodles", 0.85, 0.80, 0.95, 1, UIFont.Small, true)
+    self:addChild(self.moodlesLabel)
+    self.profIcon = nil
+    self.perkIcons = {}
+    self.moodleIcons = {}
+    self.selectedPortraitSlot = nil
 
     -- ── Custom row renderer ──────────────────────────────────────────────────
     function self.slotList:doDrawItem(y, item, alt)
@@ -98,6 +144,13 @@ function WeRosterPanel:initialise()
             local ng = slotIndex == active and 0.9 or 1
             local nb = slotIndex == active and 0.4 or 1
             self:drawText(slot.name, PADDING, y + 4, nr, ng, nb, 1, UIFont.Small)
+            if self.mouseoverselected == item.index then
+                if HOVER_ICON then
+                    self:drawTexture(HOVER_ICON, PADDING - 8, y + 6, 1, 1, 1, 0.95)
+                else
+                    self:drawText(">", PADDING - 8, y + 4, 1, 1, 1, 0.95, UIFont.Small)
+                end
+            end
 
             -- Profession label
             if slot.creation and slot.creation.profName then
@@ -124,7 +177,7 @@ function WeRosterPanel:initialise()
 
             -- Switch button (inactive slots only)
             if slotIndex ~= active then
-                local btnX  = self.width - BTN_W - PADDING - 12
+                local btnX  = self.width - BTN_W - BTN_KICK_W - 6 - PADDING - 12
                 local btnY2 = y + (ROW_H - BTN_H) / 2
                 local a     = atBase and 1 or 0.30
                 self:drawRect(btnX, btnY2, BTN_W, BTN_H, a, 0.12, 0.30, 0.55)
@@ -132,6 +185,13 @@ function WeRosterPanel:initialise()
                 local lw    = getTextManager():MeasureStringX(UIFont.Small, label)
                 self:drawText(label, btnX + (BTN_W - lw) / 2, btnY2 + 7,
                     1, 1, 1, a, UIFont.Small)
+
+                local kickX = btnX + BTN_W + 6
+                self:drawRect(kickX, btnY2, BTN_KICK_W, BTN_H, 1, 0.45, 0.12, 0.12)
+                local kickLabel = We.getText("UI_We_Kick")
+                local klw = getTextManager():MeasureStringX(UIFont.Small, kickLabel)
+                self:drawText(kickLabel, kickX + (BTN_KICK_W - klw) / 2, btnY2 + 7,
+                    1, 1, 1, 1, UIFont.Small)
             end
         end
 
@@ -149,7 +209,11 @@ function WeRosterPanel:initialise()
         if not idx or idx < 1 or idx > #self.items then return end
 
         local d    = self.items[idx].item
-        local btnX = self.width - BTN_W - PADDING - 12
+        local btnX = self.width - BTN_W - BTN_KICK_W - 6 - PADDING - 12
+        if d.isAddRow then
+            btnX = self.width - BTN_W - PADDING - 12
+        end
+        local kickX = btnX + BTN_W + 6
 
         if x >= btnX and x <= btnX + BTN_W then
             -- Right zone → switch / create
@@ -158,9 +222,18 @@ function WeRosterPanel:initialise()
             elseif d.slotIndex ~= WeData.getActiveSlot() then
                 self.rosterPanel:onSwitchClick(d.slotIndex)
             end
-        elseif not d.isAddRow and x >= PADDING and x <= PADDING + 180 then
-            -- Left zone → rename
-            self.rosterPanel:onNameClick(d.slotIndex, idx)
+        elseif not d.isAddRow and x >= kickX and x <= kickX + BTN_KICK_W then
+            if d.slotIndex ~= WeData.getActiveSlot() then
+                self.rosterPanel:onKickClick(d.slotIndex)
+            end
+        end
+
+        if d.isAddRow then
+            self.rosterPanel.selectedPortraitSlot = nil
+            self.rosterPanel:updatePortraitForSlot(nil)
+        else
+            self.rosterPanel.selectedPortraitSlot = d.slotIndex
+            self.rosterPanel:updatePortraitForSlot(d.slotIndex)
         end
     end
 
@@ -185,6 +258,208 @@ function WeRosterPanel:initialise()
     self:addChild(self.resetTraitsBtn)
 
     self:refreshRows()
+end
+
+function WeRosterPanel:clearTraitIcons()
+    if not self.perkIcons then return end
+    for _, img in ipairs(self.perkIcons) do
+        self:removeChild(img)
+    end
+    self.perkIcons = {}
+end
+
+function WeRosterPanel:clearMoodleIcons()
+    if not self.moodleIcons then return end
+    for _, img in ipairs(self.moodleIcons) do
+        self:removeChild(img)
+    end
+    self.moodleIcons = {}
+end
+
+function WeRosterPanel:clearProfessionIcon()
+    if self.profIcon then
+        self:removeChild(self.profIcon)
+        self.profIcon = nil
+    end
+end
+
+function WeRosterPanel:addTraitIcons(slot)
+    self:clearTraitIcons()
+    if not slot then return end
+
+    local x = self.portraitPanel.x
+    local y = self.perksLabel.y + 20
+    local iconSize = 16
+    local spacing = 2
+    local maxPerRow = 3
+    local idx = 0
+
+    for _, t in ipairs(slot.traits or {}) do
+        local trait = CharacterTrait.get(ResourceLocation.of(t))
+        local def = trait and CharacterTraitDefinition.getCharacterTraitDefinition(trait)
+        local tx = def and def:getTexture()
+        if tx then
+            local col = idx % maxPerRow
+            local row = math.floor(idx / maxPerRow)
+            local img = ISImage:new(x + col * (iconSize + spacing), y + row * (iconSize + spacing), iconSize, iconSize, tx)
+            img:initialise()
+            img:setVisible(true)
+            if img.setMouseOverText then
+                img:setMouseOverText((def:getLabel() or "") .. "\n" .. (def:getDescription() or ""))
+            end
+            self:addChild(img)
+            self.perkIcons[#self.perkIcons + 1] = img
+            idx = idx + 1
+        end
+    end
+end
+
+function WeRosterPanel:addProfessionIcon(slot)
+    self:clearProfessionIcon()
+    if not slot or not slot.profession then return end
+
+    local prof = CharacterProfession.get(ResourceLocation.of(slot.profession))
+    local def = prof and CharacterProfessionDefinition.getCharacterProfessionDefinition(prof)
+    local tx = def and def:getTexture()
+    if not tx then return end
+
+    local iconW, iconH = 18, 18
+    local minX = self.portraitPanel.x + 2
+    local maxX = self.portraitPanel.x + self.portraitPanel.width - iconW - 2
+    local desiredX = self.profLabel.x + 78
+    local iconX = math.max(minX, math.min(desiredX, maxX))
+    local img = ISImage:new(iconX, self.profLabel.y - 1, iconW, iconH, tx)
+    img:initialise()
+    img:setVisible(true)
+    if img.setMouseOverText then
+        img:setMouseOverText(def:getUIName() or tostring(slot.profession))
+    end
+    self:addChild(img)
+    self.profIcon = img
+end
+
+function WeRosterPanel:addMoodleIcons(slot)
+    self:clearMoodleIcons()
+    if not slot then return end
+
+    local moodleDefs = {
+        { key = "Hunger",  stat = CharacterStat.HUNGER,   good = false },
+        { key = "Thirst",  stat = CharacterStat.THIRST,   good = false },
+        { key = "Fatigue", stat = CharacterStat.FATIGUE,  good = false },
+        { key = "Stress",  stat = CharacterStat.STRESS,   good = false },
+        { key = "Pain",    stat = CharacterStat.PAIN,     good = false },
+        { key = "Boredom", stat = CharacterStat.BOREDOM,  good = false },
+    }
+
+    local x = self.portraitPanel.x
+    local y = self.moodlesLabel.y + 18
+    local size = 16
+    local spacing = 2
+    local idx = 0
+    for _, m in ipairs(moodleDefs) do
+        local raw = slot.stats and slot.stats[m.key] or nil
+        local value = tonumber(raw or 0) or 0
+        if value > 0.05 then
+            local texture = getTexture("media/ui/Moodles/Moodle_Icon_" .. m.key .. ".png") or FALLBACK_ICON
+            local col = idx % 7
+            local row = math.floor(idx / 7)
+            local img = ISImage:new(x + col * (size + spacing), y + row * (size + spacing), size, size, texture)
+            img:initialise()
+            img:setVisible(true)
+            if img.setMouseOverText then
+                img:setMouseOverText(m.key .. ": " .. tostring(math.floor(value * 100)) .. "%")
+            end
+            self:addChild(img)
+            self.moodleIcons[#self.moodleIcons + 1] = img
+            idx = idx + 1
+        end
+    end
+end
+
+function WeRosterPanel:updatePortraitForSlot(slotIndex)
+    if not self.portraitPanel then return end
+    if not slotIndex then
+        self.profLabel.name = We.getText("UI_We_Portrait_Profession")
+        self.perksLabel.name = We.getText("UI_We_Portrait_Perks")
+        self.moodlesLabel.name = "Moodles"
+        self:clearProfessionIcon()
+        self:clearTraitIcons()
+        self:clearMoodleIcons()
+        return
+    end
+    local slot = WeData.getSlot(slotIndex)
+    if not slot then return end
+
+    local active = WeData.getActiveSlot()
+    local player = getSpecificPlayer(0)
+    if slotIndex == active and player and self.portraitPanel.setCharacter then
+        self.portraitPanel:setCharacter(player)
+    else
+        local app = slot.appearance or {}
+        local desc = SurvivorFactory.CreateSurvivor()
+        desc:setFemale(app.female or false)
+
+        local vis = desc:getHumanVisual()
+        if vis then
+            if app.skinTexture and app.skinTexture ~= "" and vis.setSkinTextureName then
+                vis:setSkinTextureName(app.skinTexture)
+            end
+            if app.hairStyle and vis.setHairModel then
+                vis:setHairModel(app.hairStyle)
+            end
+            if app.hairColor and vis.setHairColor then
+                vis:setHairColor(ImmutableColor.new(app.hairColor.r, app.hairColor.g, app.hairColor.b, 1))
+            end
+            if app.beardStyle and vis.setBeardModel then
+                vis:setBeardModel(app.beardStyle)
+            end
+            if app.beardColor and vis.setBeardColor then
+                vis:setBeardColor(ImmutableColor.new(app.beardColor.r, app.beardColor.g, app.beardColor.b, 1))
+            end
+        end
+        -- Restore saved worn clothes from slot inventory so portrait uses actual outfit.
+        if desc.getWornItems and desc.setWornItem and slot.inventory then
+            local worn = desc:getWornItems()
+            if worn and worn.clear then worn:clear() end
+            for _, itemData in ipairs(slot.inventory) do
+                if itemData.lastStandStr then
+                    local item = ItemVisual.createLastStandItem and ItemVisual.createLastStandItem(itemData.lastStandStr)
+                    if item then
+                        local loc = item.getBodyLocation and item:getBodyLocation()
+                        if loc and loc ~= "" then
+                            local bodyLoc = nil
+                            if type(loc) == "string" then
+                                bodyLoc = ItemBodyLocation.get(ResourceLocation.of(loc))
+                            else
+                                bodyLoc = loc
+                            end
+                            if bodyLoc then
+                                desc:setWornItem(bodyLoc, item)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        self.portraitPanel:setSurvivorDesc(desc)
+        -- Only fallback when no saved clothing exists.
+        if self.portraitPanel.setOutfitName and (not slot.inventory or #slot.inventory == 0) then
+            self.portraitPanel:setOutfitName("Foreman", false, false)
+        end
+    end
+    if self.portraitPanel.setZoom then self.portraitPanel:setZoom(14) end
+    if self.portraitPanel.setYOffset then self.portraitPanel:setYOffset(-0.85) end
+
+    self.profLabel.name = We.getText("UI_We_Portrait_Profession")
+    self:addProfessionIcon(slot)
+    self.perksLabel.name = We.getText("UI_We_Portrait_Perks")
+    self:addTraitIcons(slot)
+    local traitCount = #(slot.traits or {})
+    local traitRows = math.max(1, math.ceil(traitCount / 3))
+    self.moodlesLabel:setY(self.perksLabel.y + 20 + traitRows * 18 + 4)
+    self.moodlesLabel.name = "Moodles"
+    self:addMoodleIcons(slot)
 end
 
 function WeRosterPanel:refreshRows()
@@ -212,6 +487,19 @@ function WeRosterPanel:refreshRows()
             and We.getText("UI_We_EmptySlot")
             or WeData.getSlot(entry.slotIndex).name
         self.slotList:addItem(label, entry)
+    end
+
+    local active = WeData.getActiveSlot()
+    local selected = self.selectedPortraitSlot
+    local selectedValid = selected and WeData.getSlot(selected) and WeData.getSlot(selected).x ~= nil
+    if selectedValid then
+        self:updatePortraitForSlot(selected)
+    elseif active and WeData.getSlot(active) and WeData.getSlot(active).x ~= nil then
+        self.selectedPortraitSlot = active
+        self:updatePortraitForSlot(active)
+    else
+        self.selectedPortraitSlot = nil
+        self:updatePortraitForSlot(nil)
     end
 
     -- Remove button: SP only, when home is set
@@ -277,39 +565,44 @@ function WeRosterPanel:onAddClick()
     end
 end
 
-function WeRosterPanel:onNameClick(slotIndex, itemIdx)
-    if self.renameBox then
-        self:removeChild(self.renameBox)
-        self.renameBox = nil
-    end
-
-    -- Position the text entry near the clicked row (best-effort scroll offset)
-    local scrollOff = self.slotList.scrollY or 0
-    local rowY = STATUS_H + (itemIdx - 1) * ROW_H - scrollOff
-    rowY = math.max(STATUS_H, math.min(rowY, self.height - REMOVE_H - 30))
-
+function WeRosterPanel:onKickClick(slotIndex)
     local slot = WeData.getSlot(slotIndex)
-    local box  = ISTextEntryBox:new(slot.name, PADDING, rowY + 2, 180, 22)
-    box.slotIndex  = slotIndex
-    box.onpresskey = function(tb, key)
-        if key == Keyboard.KEY_RETURN then
-            local newName = tb:getText()
-            if newName and newName ~= "" then
-                WeData.renameSlot(tb.slotIndex, newName)
+    if not slot then return end
+    if slotIndex == WeData.getActiveSlot() then return end
+
+    local displayName = tostring(slot.name or ("Slot " .. tostring(slotIndex)))
+    local msg = We.getText("UI_We_Kick_Confirm", displayName)
+    local modal = ISModalDialog:new(
+        getCore():getScreenWidth() / 2 - 170,
+        getCore():getScreenHeight() / 2 - 60,
+        340, 120,
+        msg,
+        true,
+        self,
+        function(target, button)
+            if button.internal ~= "YES" then return end
+            local currentSlot = WeData.getSlot(slotIndex)
+            if not currentSlot then return end
+            if slotIndex == WeData.getActiveSlot() then return end
+
+            if currentSlot.npcId then
+                WeNPC.despawnForSlot(slotIndex)
             end
-            self:removeChild(tb)
-            self.renameBox = nil
-            self:refreshRows()
-        elseif key == Keyboard.KEY_ESCAPE then
-            self:removeChild(tb)
-            self.renameBox = nil
+            WeData.killSlot(slotIndex)
+            target:refreshRows()
+
+            local player = getSpecificPlayer(0)
+            if player then
+                HaloTextHelper.addGoodText(player, We.getText("UI_We_Kick_Done", displayName))
+            end
         end
-    end
-    box:initialise()
-    box:instantiate()
-    self:addChild(box)
-    self.renameBox = box
-    box:focus()
+    )
+    modal.moveWithMouse = true
+    modal:setCapture(true)
+    modal:initialise()
+    modal:addToUIManager()
+    modal:setAlwaysOnTop(true)
+    modal:bringToTop()
 end
 
 -- ─── Hook ─────────────────────────────────────────────────────────────────────

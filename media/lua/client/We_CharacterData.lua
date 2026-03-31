@@ -311,14 +311,9 @@ function WeData.saveSlot(index)
     local stats = player:getStats()
     local xpSys = player:getXp()
 
-    -- Character name from descriptor (forename + surname)
+    -- Keep slot.name stable. It is set on character creation (or explicit rename) and
+    -- must not be overwritten from whichever descriptor is currently active during save.
     local desc = player:getDescriptor()
-    if desc then
-        local fore = desc:getForename() or ""
-        local sur  = desc:getSurname()  or ""
-        local full = (fore .. " " .. sur):match("^%s*(.-)%s*$")
-        if full ~= "" then slot.name = full end
-    end
 
     -- Position
     slot.x = player:getX()
@@ -459,6 +454,19 @@ function WeData.loadSlot(index)
     print("[We] loadSlot(" .. index .. "): isClient=" .. tostring(isClient()))
     dumpSlot("loadSlot(" .. index .. ") slot", slot)
     dumpTraits("loadSlot(" .. index .. ") player BEFORE", player)
+
+    local desc = player:getDescriptor()
+    if desc and slot.name and slot.name ~= "" then
+        local fore, sur = tostring(slot.name):match("^%s*(%S+)%s+(.+)%s*$")
+        if not fore then
+            fore = tostring(slot.name):match("^%s*(.-)%s*$")
+            sur = ""
+        end
+        if fore and fore ~= "" then
+            desc:setForename(fore)
+            desc:setSurname(sur or "")
+        end
+    end
 
     local stats = player:getStats()
     local xpSys = player:getXp()

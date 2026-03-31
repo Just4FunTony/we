@@ -69,6 +69,12 @@ local T = {
         UI_We_Tab_Characters      = "Characters",
         UI_We_EmptySlot           = "[ + New Character ]",
         UI_We_CreateChar          = "Create",
+        UI_We_Kick                = "Dismiss",
+        UI_We_Kick_Confirm        = "Are you sure you want to dismiss %1?",
+        UI_We_Kick_Done           = "Character dismissed: %1",
+        UI_We_Portrait_Profession = "Profession:",
+        UI_We_Portrait_Perks      = "Perks:",
+        UI_We_Portrait_None       = "none",
     },
     RU = {
         UI_We_Switch              = "Играть",
@@ -89,6 +95,12 @@ local T = {
         UI_We_Tab_Characters      = "Персонажи",
         UI_We_EmptySlot           = "[ + Новый персонаж ]",
         UI_We_CreateChar          = "Создать",
+        UI_We_Kick                = "Выгнать",
+        UI_We_Kick_Confirm        = "Вы точно хотите выгнать %1?",
+        UI_We_Kick_Done           = "Персонаж выгнан: %1",
+        UI_We_Portrait_Profession = "Профессия:",
+        UI_We_Portrait_Perks      = "Перки:",
+        UI_We_Portrait_None       = "нет",
     },
 }
 

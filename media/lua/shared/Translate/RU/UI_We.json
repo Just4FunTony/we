@@ -25,5 +25,11 @@
     "UI_We_BaseMenu_StartAs": "Начать играть за: %1",
 
     "UI_We_Tab_Faction": "Фракция",
-    "UI_We_Tab_Characters": "Персонажи"
+    "UI_We_Tab_Characters": "Персонажи",
+    "UI_We_Kick": "Выгнать",
+    "UI_We_Kick_Confirm": "Вы точно хотите выгнать %1?",
+    "UI_We_Kick_Done": "Персонаж выгнан: %1",
+    "UI_We_Portrait_Profession": "Профессия:",
+    "UI_We_Portrait_Perks": "Перки:",
+    "UI_We_Portrait_None": "нет"
 }

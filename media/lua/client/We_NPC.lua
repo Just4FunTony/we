@@ -63,7 +63,7 @@ end
 -- Works on any IsoGameCharacter (IsoPlayer NPC or IsoZombie).
 
 function WeNPC.applyVisuals(char, app)
-    if not app then return end
+    if not app or not char or not char.getHumanVisual then return end
     local vis = char:getHumanVisual()
     if not vis then return end
 
@@ -82,15 +82,17 @@ function WeNPC.applyVisuals(char, app)
         vis:setBeardColor(ImmutableColor.new(app.beardColor.r, app.beardColor.g, app.beardColor.b, 1))
     end
 
-    local itemVisuals = char:getItemVisuals()
-    itemVisuals:clear()
-    if app.itemVisuals then
-        for _, entry in ipairs(app.itemVisuals) do
-            local t = type(entry) == "table" and (entry.itemType or "") or tostring(entry)
-            local iv = ItemVisual.new()
-            iv:setItemType(t)
-            iv:setClothingItemName(t)
-            itemVisuals:add(iv)
+    local itemVisuals = char.getItemVisuals and char:getItemVisuals()
+    if itemVisuals then
+        itemVisuals:clear()
+        if app.itemVisuals then
+            for _, entry in ipairs(app.itemVisuals) do
+                local t = type(entry) == "table" and (entry.itemType or "") or tostring(entry)
+                local iv = ItemVisual.new()
+                iv:setItemType(t)
+                iv:setClothingItemName(t)
+                itemVisuals:add(iv)
+            end
         end
     end
 
