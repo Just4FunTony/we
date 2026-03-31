@@ -52,9 +52,47 @@ local function collectProfessions()
     return out
 end
 
+local function applyTraitsLocally(player, professionRL, traitNames)
+    local desc = player:getDescriptor()
+    if professionRL and desc then
+        local prof = CharacterProfession.get(ResourceLocation.of(professionRL))
+        if prof then
+            desc:setCharacterProfession(prof)
+        end
+    end
+
+    local knownTraits = player:getCharacterTraits():getKnownTraits()
+    knownTraits:clear()
+    for _, traitName in ipairs(traitNames or {}) do
+        local traitType = CharacterTrait.get(ResourceLocation.of(traitName))
+        if traitType then
+            knownTraits:add(traitType)
+        end
+    end
+
+    local panel = getPlayerInfoPanel and getPlayerInfoPanel(0)
+    if panel and panel.charScreen then
+        panel.charScreen.refreshNeeded = true
+    end
+end
+
+local function summarizeTraits(traits)
+    if not traits then return "[]" end
+    local out = {}
+    local maxCount = 12
+    for i, t in ipairs(traits) do
+        if i > maxCount then
+            out[#out + 1] = "...(" .. tostring(#traits - maxCount) .. " more)"
+            break
+        end
+        out[#out + 1] = tostring(t)
+    end
+    return "[" .. table.concat(out, ", ") .. "]"
+end
+
 -- ─── Core: apply random loadout to player ────────────────────────────────────
 
-function WeCharCreate.randomize(player)
+function WeCharCreate.randomize(player, slotIndex)
     local desc = player:getDescriptor()
     local n    = 1 + ZombRand(3)   -- 1, 2 or 3
 
@@ -116,26 +154,38 @@ function WeCharCreate.randomize(player)
     local posTraitDefs = pickRandom(collectPositiveTraits(), n)
     local negTraitDefs = pickRandom(collectNegativeTraits(), n)
 
-    -- Set profession FIRST — setCharacterProfession() triggers an engine callback that
-    -- re-populates knownTraits with the old profession's grants.  We clear AFTER so we
-    -- get a clean slate regardless of what that callback did.
-    desc:setCharacterProfession(profDef:getType())
-
-    -- Now clear everything and rebuild exactly the trait set we want.
-    -- No hasTrait guards: the list was just cleared, so there can be no duplicates.
-    local knownTraits = player:getCharacterTraits():getKnownTraits()
-    knownTraits:clear()
-    print("[We] Randomize: after clear size=" .. knownTraits:size())
-
+    -- Build trait name list (ResourceLocation strings) for server-side application.
+    -- getKnownTraits() on the client returns a snapshot, not a live reference,
+    -- so direct clear()+add() has no effect — must go through server.
+    local traitNames = {}
     local grantedTraits = profDef:getGrantedTraits()
     if grantedTraits then
-        for i = 0, grantedTraits:size()-1 do
-            knownTraits:add(grantedTraits:get(i))
+        for i = 0, grantedTraits:size() - 1 do
+            table.insert(traitNames, tostring(grantedTraits:get(i)))
         end
     end
-    for _, t in ipairs(posTraitDefs) do knownTraits:add(t:getType()) end
-    for _, t in ipairs(negTraitDefs) do knownTraits:add(t:getType()) end
-    print("[We] Randomize: after add size=" .. knownTraits:size())
+    for _, t in ipairs(posTraitDefs) do table.insert(traitNames, tostring(t:getType())) end
+    for _, t in ipairs(negTraitDefs) do table.insert(traitNames, tostring(t:getType())) end
+
+    -- Apply profession + traits via server command (the only path that works client-side).
+    -- slotIndex is passed so the server's traitsApplied response updates the right slot.
+    local targetSlot = slotIndex
+    if not targetSlot then
+        targetSlot = WeData and WeData.getData and WeData.getData().activeSlot or 1
+    end
+    sendClientCommand(player, "We", "applyTraits", {
+        slotIndex  = targetSlot,
+        profession = tostring(profDef:getType()),
+        traits     = traitNames,
+    })
+    -- B42 SP: apply locally too, otherwise server-side apply may not update
+    -- the current client-side player object immediately.
+    applyTraitsLocally(player, tostring(profDef:getType()), traitNames)
+    print("[We][CharCreate] randomize -> applyTraits"
+        .. " | targetSlot=" .. tostring(targetSlot)
+        .. " | prof=" .. tostring(profDef:getType())
+        .. " | traitsCount=" .. tostring(#traitNames)
+        .. " | traits=" .. summarizeTraits(traitNames))
 
     -- Apply XP boosts from profession
     local xpBoostRaw = profDef:getXpBoosts()
@@ -159,6 +209,9 @@ function WeCharCreate.randomize(player)
     stats:set(CharacterStat.PANIC,       0)
     stats:set(CharacterStat.PAIN,        0)
     stats:set(CharacterStat.UNHAPPINESS, 0)
+
+    -- Clear all body damage so wounds from the previous character don't carry over.
+    player:getBodyDamage():RestoreToFullHealth()
 
     -- ── Starting clothing ─────────────────────────────────────────────────────
     -- Clear inventory and add a basic random outfit
@@ -194,14 +247,16 @@ function WeCharCreate.randomize(player)
     player:resetModelNextFrame()
     player:resetModel()
 
-    -- Build serializable summary (display strings only, no Java objects)
+    -- Build serializable summary
     local posNames = {}
     for _, t in ipairs(posTraitDefs) do posNames[#posNames+1] = t:getLabel() end
     local negNames = {}
     for _, t in ipairs(negTraitDefs) do negNames[#negNames+1] = t:getLabel() end
 
     return {
-        profName = profDef:getUIName(),
+        profName   = profDef:getUIName(),
+        profRL     = tostring(profDef:getType()),   -- ResourceLocation string for save
+        savedTraits = traitNames,                   -- trait RL strings for direct slot write
         charName = forename .. " " .. surname,
         positive = posNames,
         negative = negNames,

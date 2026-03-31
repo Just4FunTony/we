@@ -176,6 +176,14 @@ function WeRosterPanel:initialise()
     self.removeHomeBtn.backgroundColorMouseOver = {r=0.65, g=0.15, b=0.15, a=1}
     self:addChild(self.removeHomeBtn)
 
+    -- "Reset traits" debug button — clears slot.traits so init re-captures from player
+    local resetX = PANEL_W - 160 - PADDING
+    self.resetTraitsBtn = ISButton:new(resetX, removeY, 160, BTN_H,
+        "Reset traits [debug]", self, WeRosterPanel.onResetTraits)
+    self.resetTraitsBtn.backgroundColor          = {r=0.30, g=0.10, b=0.35, a=1}
+    self.resetTraitsBtn.backgroundColorMouseOver = {r=0.50, g=0.15, b=0.55, a=1}
+    self:addChild(self.resetTraitsBtn)
+
     self:refreshRows()
 end
 
@@ -222,6 +230,25 @@ end
 
 function WeRosterPanel:render()
     ISPanel.render(self)
+end
+
+-- Clears slot.traits and slot.profession for all slots.
+-- On next game load, WeData.init() will re-capture traits from each character's live state.
+-- Use this when traits appear corrupted (e.g. all slots show the same traits).
+function WeRosterPanel:onResetTraits()
+    local data = WeData.getData()
+    for i = 1, We.MAX_SLOTS do
+        local slot = data.slots[i]
+        if slot then
+            slot.traits     = {}
+            slot.profession = nil
+        end
+    end
+    local player = getSpecificPlayer(0)
+    if player then
+        HaloTextHelper.addText(player, "We: traits reset — reload the save to re-capture")
+    end
+    print("[We] Traits reset for all slots. Reload the save to re-capture from player state.")
 end
 
 function WeRosterPanel:onRemoveHome()

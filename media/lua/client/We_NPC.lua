@@ -12,6 +12,14 @@ WeNPC.Cache = {}
 -- onZombieUpdate must not re-cache these until the zombie is confirmed gone.
 WeNPC.PendingDespawn = {}
 
+local function getDataSafe(label)
+    if not WeData or not WeData.getData then
+        print("[We][NPC] WeData not ready in " .. tostring(label))
+        return nil
+    end
+    return WeData.getData()
+end
+
 -- ─── Appearance capture ────────────────────────────────────────────────────────
 -- Captures the player's hair/skin/beard visuals plus a list of worn item types.
 -- Uses getWornItems() which is the authoritative clothing source for IsoPlayer.
@@ -119,7 +127,8 @@ function WeNPC.spawnForSlot(slotIndex)
     local player = getSpecificPlayer(0)
     if not player then return end
 
-    local data = WeData.getData()
+    local data = getDataSafe("spawnForSlot")
+    if not data then return end
     local slot = data.slots[slotIndex]
     if not slot or slot.x == nil then return end
     if WeNPC.Cache[slotIndex]    then return end
@@ -174,7 +183,8 @@ function WeNPC.despawnForSlot(slotIndex)
 
     WeNPC.Cache[slotIndex]         = nil
     WeNPC.PendingDespawn[slotIndex] = true   -- block re-caching until zombie is confirmed gone
-    local data = WeData.getData()
+    local data = getDataSafe("despawnForSlot")
+    if not data then return end
     local slot = data.slots[slotIndex]
     if slot then slot.npcId = nil end
     print("[We] Despawned NPC for slot " .. slotIndex)
@@ -183,15 +193,31 @@ end
 -- ─── OnZombieUpdate — per-tick maintenance for server-side zombie NPCs (MP) ──
 
 local function onZombieUpdate(zombie)
-    local brain = zombie:getModData().weBrain
+    local zmd = zombie:getModData()
+    local brain = zmd.weBrain
+    -- B42 save-load safety: recover resident brain by slot id if zombie lost weBrain.
+    if (not brain or not brain.slotIndex) and zmd.weSlot then
+        local weMD = ModData.getOrCreate("We")
+        local resident = weMD and weMD.residents and weMD.residents[tostring(zmd.weSlot)]
+        if resident and resident.brain then
+            brain = resident.brain
+            zmd.weBrain = brain
+            print("[We][NPC] Restored weBrain from ModData for slot " .. tostring(zmd.weSlot))
+        end
+    end
     if not brain or not brain.slotIndex then return end
+    if not zmd.weSlot then zmd.weSlot = brain.slotIndex end
 
     -- Zombie confirmed dead: if this is not a managed despawn (PendingDespawn is nil),
     -- the NPC was killed by external means — remove the slot entirely.
     if zombie:isDead() or not zombie:getCurrentSquare() then
         if not WeNPC.PendingDespawn[brain.slotIndex] then
             -- Killed by player or world — remove the slot
-            WeData.killSlot(brain.slotIndex)
+            if WeData and WeData.killSlot then
+                WeData.killSlot(brain.slotIndex)
+            else
+                print("[We][NPC] WeData not ready in onZombieUpdate.killSlot")
+            end
         end
         if WeNPC.Cache[brain.slotIndex] == zombie then
             WeNPC.Cache[brain.slotIndex] = nil
@@ -338,7 +364,8 @@ Events.OnPlayerUpdate.Add(onPlayerUpdate)
 -- ─── EveryOneMinute — respawn if NPC was unloaded ─────────────────────────────
 
 local function onEveryMinute()
-    local data   = WeData.getData()
+    local data = getDataSafe("onEveryMinute")
+    if not data then return end
     local active = data.activeSlot
 
     for i = 1, We.MAX_SLOTS do
@@ -358,7 +385,8 @@ local function onReceiveModData(key, gData)
     if key ~= "We" then return end
     if not gData or not gData.residents then return end
 
-    local data = WeData.getData()
+    local data = getDataSafe("onReceiveModData")
+    if not data then return end
     for slotStr, resident in pairs(gData.residents) do
         local slotIndex = tonumber(slotStr)
         local slot = data.slots[slotIndex]
@@ -374,7 +402,8 @@ function WeNPC.init()
     WeNPC.Cache         = {}
     WeNPC.PendingDespawn = {}
 
-    local data   = WeData.getData()
+    local data = getDataSafe("WeNPC.init")
+    if not data then return end
     local active = data.activeSlot
 
     -- Clear stale npcIds: NPC players don't persist across game reloads.
@@ -396,6 +425,8 @@ function WeNPC.init()
     -- Spawn NPCs for all inactive slots that have save data
     for i = 1, We.MAX_SLOTS do
         if i ~= active and data.slots[i] and data.slots[i].x ~= nil then
+            -- Always request spawn on load. Server-side dedup prevents duplicates if resident
+            -- already exists; this also restores NPCs that were unloaded between sessions.
             WeNPC.spawnForSlot(i)
         end
     end

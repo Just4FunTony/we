@@ -13,7 +13,12 @@ local function onFillWorldObjectContextMenu(playerNum, context, worldObjects, te
     local isMP = getWorld and getWorld():getGameMode() == "Multiplayer"
     if isMP then return end
 
+    if not WeData or not WeData.getData then
+        print("[We][HomeBase] WeData not ready; skipping context option")
+        return
+    end
     local data = WeData.getData()
+    if not data then return end
     if data.homeX then return end  -- already set; remove via F2 panel
 
     local sx, sy, sz = square:getX(), square:getY(), square:getZ()
@@ -22,6 +27,7 @@ local function onFillWorldObjectContextMenu(playerNum, context, worldObjects, te
         We.getText("UI_We_SetHome"),
         nil,
         function()
+            if not WeData or not WeData.setHome then return end
             WeData.setHome(sx, sy, sz)
             HaloTextHelper.addGoodText(player, We.getText("UI_We_HomeSet"))
         end
