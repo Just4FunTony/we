@@ -1,0 +1,16 @@
+---
+description: Run deploy.sh after editing mod Lua (sync to Workshop/game paths)
+alwaysApply: true
+---
+
+# Deploy после правок
+
+После изменений в `media/lua/` (client, server, shared) перед завершением задачи выполни из корня репозитория:
+
+```bash
+./deploy.sh
+```
+
+Скрипт копирует Lua в каталоги мода (Workshop / Steam workshop content). Не считай правки по моду «готовыми», пока деплой не выполнен, если пользователь явно не просил только правки без синхронизации.
+
+читай логи, которые находятся по пути /home/tony/Zomboid/Logs перед работой

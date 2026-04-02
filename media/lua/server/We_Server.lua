@@ -31,6 +31,20 @@ local function applyAppearance(zombie, app)
         end
     end
 
+    -- Remove any zombie-style attached weapons like "knife in back".
+    local ai = zombie.getAttachedItems and zombie:getAttachedItems()
+    local grp = ai and ai.getGroup and ai:getGroup()
+    if grp and grp.size and zombie.setAttachedItem then
+        for i = 0, grp:size() - 1 do
+            local loc = grp:getLocationByIndex(i)
+            local locId = loc and loc.getId and loc:getId()
+            if locId then
+                pcall(zombie.setAttachedItem, zombie, locId, nil)
+            end
+        end
+    end
+    if ai and ai.clear then pcall(ai.clear, ai) end
+
     -- Remove blood / dirt so NPC looks like a living survivor
     local maxIdx = BloodBodyPartType.MAX:index()
     for i = 0, maxIdx - 1 do
@@ -316,6 +330,30 @@ local function onClientCommand(module, command, player, args)
 
         print("[We] Despawned resident NPC slot=" .. tostring(slotIndex))
 
+    -- ── killResident (play death) ───────────────────────────────────────────────
+    elseif command == "killResident" then
+        local slotIndex = args.slotIndex
+        if not slotIndex then return end
+        local cell = getCell()
+        if cell then
+            local zList = cell:getZombieList()
+            for i = 0, zList:size() - 1 do
+                local z = zList:get(i)
+                local zmd = z and z:getModData()
+                local zBrain = zmd and zmd.weBrain
+                local sameSlot = zmd and (
+                    zmd.weSlot == slotIndex
+                    or (zBrain and zBrain.slotIndex == slotIndex)
+                )
+                if z and sameSlot and not z:isDead() then
+                    if z.setInvulnerable then pcall(z.setInvulnerable, z, false) end
+                    z:Kill(nil)
+                    print("[We] Killed resident NPC slot=" .. tostring(slotIndex))
+                    break
+                end
+            end
+        end
+
     -- ── applyTraits ────────────────────────────────────────────────────────────
     -- Client getKnownTraits() returns a snapshot; only server-side changes persist.
     elseif command == "applyTraits" then
@@ -357,6 +395,59 @@ local function onClientCommand(module, command, player, args)
             .. " | slot=" .. tostring(args and args.slotIndex)
             .. " | prof=" .. tostring(args and args.profession)
             .. " | traitsCount=" .. tostring(#(args and args.traits or {})))
+
+    -- ── deathSwapCleanup ───────────────────────────────────────────────────────
+    -- MP / host: remove the vanilla player corpse at the death cell and drop zombie
+    -- chase targets on this player so AI doesn't follow the same IsoPlayer to a new slot position.
+    elseif command == "deathSwapCleanup" then
+        local x, y, z = args.x, args.y, args.z
+        local r = tonumber(args.radius) or 2
+        local cell = getCell()
+        if cell and x and y then
+            local fx = math.floor(x)
+            local fy = math.floor(y)
+            local fz = math.floor(z or 0)
+            for dx = -r, r do
+                for dy = -r, r do
+                    local sq = cell:getGridSquare(fx + dx, fy + dy, fz)
+                    if sq then
+                        local function strip(list)
+                            if not list then return end
+                            for ii = list:size() - 1, 0, -1 do
+                                local o = list:get(ii)
+                                if o and instanceof(o, "IsoDeadBody") then
+                                    pcall(function() sq:removeCorpse(o, false) end)
+                                    pcall(function() o:removeFromWorld() end)
+                                    pcall(function() o:removeFromSquare() end)
+                                end
+                            end
+                        end
+                        strip(sq:getObjects())
+                        if sq.getStaticMovingObjects then strip(sq:getStaticMovingObjects()) end
+                    end
+                end
+            end
+        end
+        if player then
+            local cell2 = getCell()
+            if cell2 then
+                local zList = cell2:getZombieList()
+                for i = 0, zList:size() - 1 do
+                    local z = zList:get(i)
+                    local zmd = z and z.getModData and z:getModData()
+                    if z and not z:isDead() and not (zmd and zmd.weBrain) then
+                        local t = nil
+                        pcall(function() t = z:getTarget() end)
+                        if t == player then
+                            pcall(function() z:setTarget(nil) end)
+                            pcall(function()
+                                if z.setTargetSeenTime then z:setTargetSeenTime(0) end
+                            end)
+                        end
+                    end
+                end
+            end
+        end
 
     -- ── requestTraits ──────────────────────────────────────────────────────────
     -- Client requests current authoritative trait list (used on game load to

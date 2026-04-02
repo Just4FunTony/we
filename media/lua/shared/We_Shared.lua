@@ -9,7 +9,7 @@ We.HOME_SWITCH_RADIUS = 30   -- tiles radius around the custom home point
 -- Stat keys for save/load, paired with CharacterStat enum values (B42 API)
 We.STATS_KEYS = {
     "Hunger", "Thirst", "Fatigue", "Endurance", "Boredom",
-    "Stress", "Pain", "Unhappiness",
+    "Stress", "Pain", "Unhappiness", "MuscleStrain",
 }
 
 -- Returns a fresh, empty slot table (slot.x == nil means "never saved")
@@ -41,6 +41,7 @@ function We.defaultSlot(index)
         -- Rolled character loadout (set on first use, nil until then)
         creation = nil,  -- {profession, positive={...}, negative={...}}
         temperature = nil,
+        health = 100,
 
         -- Persistent outfit ID of the NPC zombie representing this character.
         -- nil when the character is active (being played by the player).
@@ -77,6 +78,19 @@ local T = {
         UI_We_Portrait_Profession = "Profession:",
         UI_We_Portrait_Perks      = "Perks:",
         UI_We_Portrait_None       = "none",
+        UI_We_Inspect             = "Inspect",
+        UI_We_CheckHealth         = "Check health",
+        UI_We_Inspect_Done        = "Wounds treated: %1",
+        UI_We_Inspect_NoWounds    = "No untreated wounds: %1",
+        UI_We_CheckHealth_Title   = "Health check: %1",
+        UI_We_CheckHealth_Treat   = "Treat wounds?",
+        UI_We_Treatment_Title     = "Medical: %1",
+        UI_We_Treatment_None      = "No wounds",
+        UI_We_Treatment_Bandage   = "Bandage",
+        UI_We_Treatment_Disinfect = "Disinfect",
+        UI_We_Treatment_Stitch    = "Stitch",
+        UI_We_Treatment_Splint    = "Splint",
+        UI_We_Treatment_All       = "Treat all",
     },
     RU = {
         UI_We_Switch              = "Играть",
@@ -103,6 +117,19 @@ local T = {
         UI_We_Portrait_Profession = "Профессия:",
         UI_We_Portrait_Perks      = "Перки:",
         UI_We_Portrait_None       = "нет",
+        UI_We_Inspect             = "Осмотреть",
+        UI_We_CheckHealth         = "Проверить состояние здоровья",
+        UI_We_Inspect_Done        = "Раны обработаны: %1",
+        UI_We_Inspect_NoWounds    = "Необработанных ран нет: %1",
+        UI_We_CheckHealth_Title   = "Состояние здоровья: %1",
+        UI_We_CheckHealth_Treat   = "Обработать раны?",
+        UI_We_Treatment_Title     = "Осмотр: %1",
+        UI_We_Treatment_None      = "Ран нет",
+        UI_We_Treatment_Bandage   = "Перевязать",
+        UI_We_Treatment_Disinfect = "Дезинфицировать",
+        UI_We_Treatment_Stitch    = "Зашить",
+        UI_We_Treatment_Splint    = "Наложить шину",
+        UI_We_Treatment_All       = "Лечить все",
     },
 }
 

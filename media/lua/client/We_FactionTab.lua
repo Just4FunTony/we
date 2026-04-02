@@ -2,6 +2,7 @@
 -- Hooks the Faction button in ISUserPanelUI to open a tabbed window that
 -- contains both the standard Faction panel and our Characters roster.
 require "ISUI/ISUI3DModel"
+require "XpSystem/ISUI/ISCharacterScreen"
 
 local PANEL_W  = 520
 local VIEW_H   = 450
@@ -19,6 +20,17 @@ local PORTRAIT_W = 130
 local PORTRAIT_H = 190
 local HOVER_ICON = getTexture("media/ui/ArrowRight.png")
 local FALLBACK_ICON = getTexture("media/ui/ArrowRight.png")
+
+local function moodleLevelFrom01(v)
+    v = tonumber(v or 0) or 0
+    if v < 0 then v = 0 end
+    if v > 1 then v = 1 end
+    if v <= 0.10 then return 0 end
+    if v <= 0.30 then return 1 end
+    if v <= 0.55 then return 2 end
+    if v <= 0.80 then return 3 end
+    return 4
+end
 
 -- ─── WeRosterPanel ────────────────────────────────────────────────────────────
 -- Shows only used character slots + one empty "Create" row, up to MAX_SLOTS.
@@ -60,20 +72,47 @@ local function getLiveStatsForSlot(slotIndex, slot)
     return live
 end
 
+local function slotHasCharacterData(slot)
+    if not slot then return false end
+    if (tonumber(slot.health) or 100) <= 0 then return false end
+    if slot.x ~= nil then return true end
+    if slot.npcId ~= nil then return true end
+    if slot.creation ~= nil then return true end
+    if slot.profession ~= nil then return true end
+    if slot.traits and #slot.traits > 0 then return true end
+    if slot.inventory and #slot.inventory > 0 then return true end
+    if slot.skillsList and #slot.skillsList > 0 then return true end
+    return false
+end
+
 -- Returns [{slotIndex, isAddRow}] — used slots + one empty slot (unless full)
 function WeRosterPanel:getVisibleSlots()
     local data   = WeData.getData()
     local result = {}
     local usedCount = 0
+    if not data.slots then
+        data.slots = {}
+        for i = 1, We.MAX_SLOTS do
+            data.slots[i] = We.defaultSlot(i)
+        end
+    end
     for i = 1, We.MAX_SLOTS do
         local slot = data.slots[i]
-        if slot and slot.x ~= nil then
+        if slotHasCharacterData(slot) then
             usedCount = usedCount + 1
             table.insert(result, {slotIndex = i, isAddRow = false})
         end
     end
     if usedCount < We.MAX_SLOTS then
-        table.insert(result, {slotIndex = usedCount + 1, isAddRow = true})
+        for i = 1, We.MAX_SLOTS do
+            if not slotHasCharacterData(data.slots[i]) then
+                table.insert(result, {slotIndex = i, isAddRow = true})
+                break
+            end
+        end
+    end
+    if #result == 0 then
+        table.insert(result, {slotIndex = 1, isAddRow = true})
     end
     return result
 end
@@ -97,37 +136,51 @@ function WeRosterPanel:initialise()
     self.slotList.rosterPanel = self
 
     -- Portrait (selected slot)
-    if ISCharacterScreenAvatar then
+    local ENABLE_PORTRAIT = true
+    local portraitX = self.slotList.width + 8
+    local portraitY = STATUS_H + 4
+    if ENABLE_PORTRAIT and ISCharacterScreenAvatar then
         self.portraitPanel = ISCharacterScreenAvatar:new(
-            self.slotList.width + 8,
-            STATUS_H + 4,
-            PORTRAIT_W,
-            PORTRAIT_H
-        )
-    else
-        self.portraitPanel = ISUI3DModel:new(
-            self.slotList.width + 8,
-            STATUS_H + 4,
+            portraitX,
+            portraitY,
             PORTRAIT_W,
             PORTRAIT_H
         )
     end
-    self.portraitPanel:initialise()
-    self.portraitPanel:instantiate()
-    self.portraitPanel:setVisible(true)
-    self:addChild(self.portraitPanel)
-    self.portraitPanel:setState("idle")
-    self.portraitPanel:setDirection(IsoDirections.S)
-    self.portraitPanel:setIsometric(false)
-    if self.portraitPanel.setDoRandomExtAnimations then self.portraitPanel:setDoRandomExtAnimations(true) end
-    if self.portraitPanel.setZoom then self.portraitPanel:setZoom(14) end
-    if self.portraitPanel.setYOffset then self.portraitPanel:setYOffset(-0.85) end
+    self._portraitDisabled = (self.portraitPanel == nil)
+    if self.portraitPanel then
+        self.portraitPanel:initialise()
+        self.portraitPanel:instantiate()
+        self.portraitPanel:setVisible(true)
+        self:addChild(self.portraitPanel)
+    end
+    if self.portraitPanel and self.portraitPanel.render then
+        local baseRender = self.portraitPanel.render
+        local owner = self
+        self.portraitPanel.render = function(panel, ...)
+            if owner._portraitDisabled then return end
+            local ok, err = pcall(baseRender, panel, ...)
+            if not ok then
+                owner._portraitDisabled = true
+                panel:setVisible(false)
+                print("[We] portrait render disabled after error: " .. tostring(err))
+            end
+        end
+    end
+    if self.portraitPanel then
+        self.portraitPanel:setState("idle")
+        self.portraitPanel:setDirection(IsoDirections.S)
+        self.portraitPanel:setIsometric(false)
+        if self.portraitPanel.setDoRandomExtAnimations then self.portraitPanel:setDoRandomExtAnimations(true) end
+        if self.portraitPanel.setZoom then self.portraitPanel:setZoom(14) end
+        if self.portraitPanel.setYOffset then self.portraitPanel:setYOffset(-0.85) end
+    end
 
-    self.profLabel = ISLabel:new(self.portraitPanel.x, self.portraitPanel.y + PORTRAIT_H + 8, 16, We.getText("UI_We_Portrait_Profession"), 0.95, 0.85, 0.35, 1, UIFont.Small, true)
+    self.profLabel = ISLabel:new(portraitX, portraitY + PORTRAIT_H + 8, 16, We.getText("UI_We_Portrait_Profession"), 0.95, 0.85, 0.35, 1, UIFont.Small, true)
     self:addChild(self.profLabel)
-    self.perksLabel = ISLabel:new(self.portraitPanel.x, self.profLabel.y + 24, 16, We.getText("UI_We_Portrait_Perks"), 0.75, 0.90, 0.75, 1, UIFont.Small, true)
+    self.perksLabel = ISLabel:new(portraitX, self.profLabel.y + 24, 16, We.getText("UI_We_Portrait_Perks"), 0.75, 0.90, 0.75, 1, UIFont.Small, true)
     self:addChild(self.perksLabel)
-    self.moodlesLabel = ISLabel:new(self.portraitPanel.x, self.perksLabel.y + 38, 16, "Moodles", 0.85, 0.80, 0.95, 1, UIFont.Small, true)
+    self.moodlesLabel = ISLabel:new(portraitX, self.perksLabel.y + 38, 16, "Moodles", 0.85, 0.80, 0.95, 1, UIFont.Small, true)
     self:addChild(self.moodlesLabel)
     self.profIcon = nil
     self.perkIcons = {}
@@ -138,6 +191,8 @@ function WeRosterPanel:initialise()
     function self.slotList:doDrawItem(y, item, alt)
         local d      = item.item
         local atBase = WeData.isAtHomeBase()
+        local data   = WeData.getData()
+        local canSwitch = atBase or (data and data._deathSelectionMode == true)
 
         if d.isAddRow then
             -- "Create new character" row
@@ -148,7 +203,7 @@ function WeRosterPanel:initialise()
 
             local btnX  = self.width - BTN_W - PADDING - 12
             local btnY2 = y + (ROW_H - BTN_H) / 2
-            local a     = atBase and 1 or 0.30
+            local a     = canSwitch and 1 or 0.30
             self:drawRect(btnX, btnY2, BTN_W, BTN_H, a, 0.10, 0.40, 0.18)
             local label = We.getText("UI_We_CreateChar")
             local lw    = getTextManager():MeasureStringX(UIFont.Small, label)
@@ -204,7 +259,7 @@ function WeRosterPanel:initialise()
             if slotIndex ~= active then
                 local btnX  = self.width - BTN_W - BTN_KICK_W - 6 - PADDING - 12
                 local btnY2 = y + (ROW_H - BTN_H) / 2
-                local a     = atBase and 1 or 0.30
+                local a     = canSwitch and 1 or 0.30
                 self:drawRect(btnX, btnY2, BTN_W, BTN_H, a, 0.12, 0.30, 0.55)
                 local label = We.getText("UI_We_Switch")
                 local lw    = getTextManager():MeasureStringX(UIFont.Small, label)
@@ -229,6 +284,8 @@ function WeRosterPanel:initialise()
     -- Divides each row into left zone (rename) and right zone (switch/create).
     function self.slotList:onMouseDown(x, y)
         ISScrollingListBox.onMouseDown(self, x, y)
+        print("[We][DbgSwitch] slotList:onMouseDown x=" .. tostring(x) .. " y=" .. tostring(y)
+            .. " selected=" .. tostring(self.selected) .. " items=" .. tostring(#self.items))
 
         local idx = self.selected
         if not idx or idx < 1 or idx > #self.items then return end
@@ -243,12 +300,16 @@ function WeRosterPanel:initialise()
         if x >= btnX and x <= btnX + BTN_W then
             -- Right zone → switch / create
             if d.isAddRow then
+                print("[We][DbgSwitch] click create row slotIndex=" .. tostring(d.slotIndex))
                 self.rosterPanel:onAddClick()
             elseif d.slotIndex ~= WeData.getActiveSlot() then
+                print("[We][DbgSwitch] click switch slotIndex=" .. tostring(d.slotIndex)
+                    .. " active=" .. tostring(WeData.getActiveSlot()))
                 self.rosterPanel:onSwitchClick(d.slotIndex)
             end
         elseif not d.isAddRow and x >= kickX and x <= kickX + BTN_KICK_W then
             if d.slotIndex ~= WeData.getActiveSlot() then
+                print("[We][DbgSwitch] click kick slotIndex=" .. tostring(d.slotIndex))
                 self.rosterPanel:onKickClick(d.slotIndex)
             end
         end
@@ -304,7 +365,7 @@ function WeRosterPanel:addTraitIcons(slot)
     self:clearTraitIcons()
     if not slot then return end
 
-    local x = self.portraitPanel.x
+    local x = (self.portraitPanel and self.portraitPanel.x) or (self.slotList.width + 8)
     local y = self.perksLabel.y + 20
     local iconSize = 16
     local spacing = 2
@@ -341,8 +402,10 @@ function WeRosterPanel:addProfessionIcon(slot)
     if not tx then return end
 
     local iconW, iconH = 18, 18
-    local minX = self.portraitPanel.x + 2
-    local maxX = self.portraitPanel.x + self.portraitPanel.width - iconW - 2
+    local portraitX = (self.portraitPanel and self.portraitPanel.x) or (self.slotList.width + 8)
+    local portraitW = (self.portraitPanel and self.portraitPanel.width) or PORTRAIT_W
+    local minX = portraitX + 2
+    local maxX = portraitX + portraitW - iconW - 2
     local desiredX = self.profLabel.x + 78
     local iconX = math.max(minX, math.min(desiredX, maxX))
     local img = ISImage:new(iconX, self.profLabel.y - 1, iconW, iconH, tx)
@@ -373,6 +436,11 @@ function WeRosterPanel:addMoodleIcons(slot, slotIndex)
         { key = "Hyperthermia", text = "Hyperthermia", mt = MoodleType.HYPERTHERMIA, textureKeys = {"Hyperthermia"} },
         { key = "Hypothermia", text = "Hypothermia", mt = MoodleType.HYPOTHERMIA, textureKeys = {"Hypothermia", "Cold"} },
         { key = "HeavyLoad", text = "Heavy Load", mt = MoodleType.HEAVY_LOAD, textureKeys = {"HeavyLoad", "Endurance"} },
+        { key = "Bleeding", text = "Bleeding", mt = MoodleType.BLEEDING, textureKeys = {"Bleeding", "Pain"} },
+        { key = "Wet", text = "Wet", mt = MoodleType.WET, textureKeys = {"Wet", "Sick"} },
+        { key = "HasACold", text = "Cold", mt = MoodleType.HAS_A_COLD, textureKeys = {"HasACold", "Sick"} },
+        { key = "Windchill", text = "Windchill", mt = MoodleType.WINDCHILL, textureKeys = {"Windchill", "Cold"} },
+        { key = "Injured", text = "Injured", mt = MoodleType.INJURED, textureKeys = {"Injured", "Pain"} },
     }
 
     local function getMoodleTexture(def)
@@ -383,7 +451,7 @@ function WeRosterPanel:addMoodleIcons(slot, slotIndex)
         return FALLBACK_ICON
     end
 
-    local x = self.portraitPanel.x
+    local x = (self.portraitPanel and self.portraitPanel.x) or (self.slotList.width + 8)
     local y = self.moodlesLabel.y + 18
     local size = 16
     local spacing = 2
@@ -391,24 +459,43 @@ function WeRosterPanel:addMoodleIcons(slot, slotIndex)
     local active = WeData.getActiveSlot()
     local player = getSpecificPlayer(0)
     local moodles = player and player:getMoodles()
+    local shownKeys = {}
     for _, m in ipairs(moodleDefs) do
         local level = 0
         if slotIndex == active and moodles and m.mt then
             level = moodles:getMoodleLevel(m.mt) or 0
         else
             local savedMoodles = slot.moodles or {}
-            if savedMoodles[m.key] ~= nil then
-                level = tonumber(savedMoodles[m.key]) or 0
+            local computedLevel = 0
+            local savedLevel = savedMoodles[m.key]
+            if savedLevel == nil and m.key == "Stress" then
+                savedLevel = savedMoodles.Stressed
+            end
+            if savedLevel ~= nil then
+                -- Inactive slot: trust saved/simulated moodle level first.
+                level = tonumber(savedLevel) or 0
             else
                 local s = getLiveStatsForSlot(slotIndex or -1, slot)
                 local raw = s and s[m.stat] or nil
-                local value = tonumber(raw or 0) or 0
-                if m.stat == "Endurance" then
-                    value = 1 - value
+                local hasStat = (m.stat ~= nil and raw ~= nil)
+                if not hasStat then
+                    level = 0
+                else
+                    local value = tonumber(raw or 0) or 0
+                    if m.stat == "Endurance" then
+                        value = 1 - value
+                    end
+                    computedLevel = moodleLevelFrom01(value)
+                    level = computedLevel
                 end
-                if value > 0 then
-                    level = math.max(1, math.min(4, math.floor(value * 4 + 0.5)))
-                end
+            end
+            if m.key == "Stress" then
+                local s2 = getLiveStatsForSlot(slotIndex or -1, slot)
+                local stress01 = s2 and tonumber(s2.Stress or 0) or 0
+                computedLevel = moodleLevelFrom01(stress01)
+                local alt = tonumber(savedMoodles.Stressed or -1) or -1
+                if alt > computedLevel then computedLevel = alt end
+                if computedLevel > level then level = computedLevel end
             end
         end
         if slotIndex == active and m.key == "Hypothermia" and level <= 0 and player and player.getTemperature then
@@ -430,12 +517,39 @@ function WeRosterPanel:addMoodleIcons(slot, slotIndex)
             self:addChild(img)
             self.moodleIcons[#self.moodleIcons + 1] = img
             idx = idx + 1
+            shownKeys[m.key] = true
+        end
+    end
+
+    -- Also show any saved/simulated moodles not listed above.
+    if slotIndex ~= active then
+        for k, v in pairs(slot.moodles or {}) do
+            if not shownKeys[k] then
+                local level = tonumber(v) or 0
+                if level > 0 then
+                    local texture = FALLBACK_ICON
+                    local tx = getTexture("media/ui/Moodles/Moodle_Icon_" .. tostring(k) .. ".png")
+                    if tx then texture = tx end
+                    local col = idx % 7
+                    local row = math.floor(idx / 7)
+                    local ix = x + col * (size + spacing)
+                    local iy = y + row * (size + spacing)
+                    local img = ISImage:new(ix, iy, size, size, texture)
+                    img:initialise()
+                    img:setVisible(true)
+                    if img.setMouseOverText then
+                        img:setMouseOverText(tostring(k) .. " Lv." .. tostring(level))
+                    end
+                    self:addChild(img)
+                    self.moodleIcons[#self.moodleIcons + 1] = img
+                    idx = idx + 1
+                end
+            end
         end
     end
 end
 
 function WeRosterPanel:updatePortraitForSlot(slotIndex)
-    if not self.portraitPanel then return end
     if not slotIndex then
         self.profLabel.name = We.getText("UI_We_Portrait_Profession")
         self.perksLabel.name = We.getText("UI_We_Portrait_Perks")
@@ -443,16 +557,32 @@ function WeRosterPanel:updatePortraitForSlot(slotIndex)
         self:clearProfessionIcon()
         self:clearTraitIcons()
         self:clearMoodleIcons()
+        self._portraitShowIn = nil
+        if self.portraitPanel then self.portraitPanel:setVisible(false) end
         return
     end
     local slot = WeData.getSlot(slotIndex)
     if not slot then return end
 
+    -- Java can NPE in UI3DModel.render if we swap survivor while the preview is visible; only reset when selection changes.
+    local selChanged = (slotIndex ~= self._lastPortraitSlot)
+    self._lastPortraitSlot = slotIndex
+    if selChanged and self.portraitPanel and not self._portraitDisabled then
+        self.portraitPanel:setVisible(false)
+        self._portraitShowIn = 8
+    end
+
     local active = WeData.getActiveSlot()
     local player = getSpecificPlayer(0)
-    if slotIndex == active and player and self.portraitPanel.setCharacter then
-        self.portraitPanel:setCharacter(player)
-    else
+    if self.portraitPanel and not self._portraitDisabled and slotIndex == active and player and self.portraitPanel.setCharacter then
+        local okChar = pcall(function() self.portraitPanel:setCharacter(player) end)
+        if not okChar then
+            self._portraitDisabled = true
+            self.portraitPanel:setVisible(false)
+            print("[We] portrait disabled: setCharacter failed")
+            return
+        end
+    elseif self.portraitPanel and not self._portraitDisabled then
         local app = slot.appearance or {}
         local desc = SurvivorFactory.CreateSurvivor()
         desc:setFemale(app.female or false)
@@ -500,14 +630,20 @@ function WeRosterPanel:updatePortraitForSlot(slotIndex)
             end
         end
 
-        self.portraitPanel:setSurvivorDesc(desc)
+        local okSet = pcall(self.portraitPanel.setSurvivorDesc, self.portraitPanel, desc)
+        if not okSet then
+            self._portraitDisabled = true
+            self.portraitPanel:setVisible(false)
+            print("[We] portrait disabled: setSurvivorDesc failed")
+            return
+        end
         -- Only fallback when no saved clothing exists.
         if self.portraitPanel.setOutfitName and (not slot.inventory or #slot.inventory == 0) then
             self.portraitPanel:setOutfitName("Foreman", false, false)
         end
     end
-    if self.portraitPanel.setZoom then self.portraitPanel:setZoom(14) end
-    if self.portraitPanel.setYOffset then self.portraitPanel:setYOffset(-0.85) end
+    if self.portraitPanel and self.portraitPanel.setZoom then self.portraitPanel:setZoom(14) end
+    if self.portraitPanel and self.portraitPanel.setYOffset then self.portraitPanel:setYOffset(-0.85) end
 
     self.profLabel.name = We.getText("UI_We_Portrait_Profession")
     self:addProfessionIcon(slot)
@@ -523,9 +659,33 @@ end
 function WeRosterPanel:refreshRows()
     local data   = WeData.getData()
     local atBase = WeData.isAtHomeBase()
+    local deathMode = data and data._deathSelectionMode == true
+
+    -- In post-death mode prioritize reliable slot selection UI over portrait rendering.
+    if self.slotList then
+        if deathMode then
+            self.slotList:setWidth(self.width - PADDING * 2)
+            if self.portraitPanel then self.portraitPanel:setVisible(false) end
+            self.profLabel:setVisible(false)
+            self.perksLabel:setVisible(false)
+            self.moodlesLabel:setVisible(false)
+            self:clearProfessionIcon()
+            self:clearTraitIcons()
+            self:clearMoodleIcons()
+        else
+            self.slotList:setWidth(self.width - PORTRAIT_W - PADDING - 8)
+            if self.portraitPanel and not self._portraitDisabled then self.portraitPanel:setVisible(true) end
+            self.profLabel:setVisible(true)
+            self.perksLabel:setVisible(true)
+            self.moodlesLabel:setVisible(true)
+        end
+    end
 
     -- Status label
-    if atBase then
+    if deathMode then
+        self.baseStatusLabel.name = "Post-death switch available"
+        self.baseStatusLabel.r, self.baseStatusLabel.g, self.baseStatusLabel.b = 0.3, 0.9, 0.4
+    elseif atBase then
         self.baseStatusLabel.name = We.getText("UI_We_Status_AtBase")
         self.baseStatusLabel.r, self.baseStatusLabel.g, self.baseStatusLabel.b = 0.3, 0.9, 0.4
     elseif not data.homeX then
@@ -549,10 +709,10 @@ function WeRosterPanel:refreshRows()
 
     local active = WeData.getActiveSlot()
     local selected = self.selectedPortraitSlot
-    local selectedValid = selected and WeData.getSlot(selected) and WeData.getSlot(selected).x ~= nil
+    local selectedValid = selected and slotHasCharacterData(WeData.getSlot(selected))
     if selectedValid then
         self:updatePortraitForSlot(selected)
-    elseif active and WeData.getSlot(active) and WeData.getSlot(active).x ~= nil then
+    elseif active and slotHasCharacterData(WeData.getSlot(active)) then
         self.selectedPortraitSlot = active
         self:updatePortraitForSlot(active)
     else
@@ -566,6 +726,20 @@ function WeRosterPanel:refreshRows()
 end
 
 function WeRosterPanel:update()
+    if self._portraitShowIn then
+        self._portraitShowIn = self._portraitShowIn - 1
+        if self._portraitShowIn <= 0 then
+            self._portraitShowIn = nil
+            if self.portraitPanel and not self._portraitDisabled then
+                local data = WeData.getData()
+                local deathMode = data and data._deathSelectionMode == true
+                if not deathMode then
+                    self.portraitPanel:setVisible(true)
+                end
+            end
+        end
+    end
+
     -- Fast-path: keep active selected portrait live (clothes/moodles change in real time).
     self._portraitTick = (self._portraitTick or 0) + 1
     if self._portraitTick >= 20 then
@@ -599,17 +773,48 @@ function WeRosterPanel:onRemoveHome()
 end
 
 function WeRosterPanel:onSwitchClick(slotIndex)
-    WeData.switchTo(slotIndex)
+    print("[We][DbgSwitch] onSwitchClick slot=" .. tostring(slotIndex)
+        .. " activeBefore=" .. tostring(WeData.getActiveSlot()))
+    local data = WeData and WeData.getData and WeData.getData()
+    if data and data._deathSelectionMode == true and WeData.requestVanillaRespawnForDeathSlot then
+        local ok = WeData.requestVanillaRespawnForDeathSlot(slotIndex)
+        print("[We][DbgSwitch] onSwitchClick(deathMode) result=" .. tostring(ok))
+        self:refreshRows()
+        if ok and WeTabPanel then
+            WeTabPanel:setVisible(false)
+        end
+        return
+    end
+
+    local ok = WeData.switchTo(slotIndex)
+    print("[We][DbgSwitch] onSwitchClick result=" .. tostring(ok)
+        .. " activeAfter=" .. tostring(WeData.getActiveSlot()))
     self:refreshRows()
+    if ok and WeTabPanel then
+        WeTabPanel:setVisible(false)
+    end
 end
 
 function WeRosterPanel:onAddClick()
     -- Find the first unused slot and switch to it (triggers character creation)
     local data = WeData.getData()
+    local deathMode = data and data._deathSelectionMode == true
+    print("[We][DbgSwitch] onAddClick begin active=" .. tostring(WeData.getActiveSlot()))
     for i = 1, We.MAX_SLOTS do
         if not data.slots[i] or data.slots[i].x == nil then
-            WeData.switchTo(i)
+            print("[We][DbgSwitch] onAddClick picked slot=" .. tostring(i))
+            local ok = nil
+            if deathMode and WeData.requestVanillaRespawnForDeathSlot then
+                ok = WeData.requestVanillaRespawnForDeathSlot(i)
+            else
+                ok = WeData.switchTo(i)
+            end
+            print("[We][DbgSwitch] onAddClick result=" .. tostring(ok)
+                .. " activeAfter=" .. tostring(WeData.getActiveSlot()))
             self:refreshRows()
+            if ok and WeTabPanel then
+                WeTabPanel:setVisible(false)
+            end
             return
         end
     end
@@ -659,10 +864,25 @@ end
 
 local WeTabPanel = nil  -- singleton
 
-function openWeTabPanel(userPanel)
-    -- Toggle: close if already open
-    if WeTabPanel and WeTabPanel:isVisible() then
+function openWeTabPanel(userPanel, forceOpen)
+    -- Toggle: close if already open (skip when forceOpen — e.g. post-death roster must show, not hide).
+    forceOpen = forceOpen == true
+    -- Death flow often leaves ISUIHandler.allUIVisible false / HUD hidden; restore before showing panel.
+    if forceOpen and WeData and WeData.restoreGameHudVisibility then
+        WeData.restoreGameHudVisibility()
+    end
+    if not forceOpen and WeTabPanel and WeTabPanel:isVisible() then
         WeTabPanel:setVisible(false)
+        return
+    end
+
+    if forceOpen and WeTabPanel then
+        WeTabPanel:setVisible(true)
+        if WeTabPanel.weRosterPanel and WeTabPanel.weRosterPanel.refreshRows then
+            WeTabPanel.weRosterPanel:refreshRows()
+        end
+        if WeTabPanel.setAlwaysOnTop then WeTabPanel:setAlwaysOnTop(true) end
+        if WeTabPanel.bringToTop then WeTabPanel:bringToTop() end
         return
     end
 
@@ -717,7 +937,17 @@ function openWeTabPanel(userPanel)
     local rosterView = WeRosterPanel:new(0, 0, PANEL_W, VIEW_H)
     rosterView:initialise()
     WeTabPanel:addView(We.getText("UI_We_Tab_Characters"), rosterView)
+    WeTabPanel.weRosterPanel = rosterView
     WeTabPanel:activateView(We.getText("UI_We_Tab_Characters"))
+end
+
+-- Death swap / switch: visible ISTabPanel captures WASD for UI; IsoPlayer flags stay false — looks like "movement broken".
+function We.closeWeTabPanelIfOpen()
+    if not WeTabPanel then return end
+    if WeTabPanel:isVisible() then
+        WeTabPanel:setVisible(false)
+        print("[We] WeTabPanel closed (keyboard was likely captured by the Characters UI)")
+    end
 end
 
 -- ─── Monkey-patch ISUserPanelUI ───────────────────────────────────────────────
