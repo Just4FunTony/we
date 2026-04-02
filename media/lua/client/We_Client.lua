@@ -29,6 +29,17 @@ local function tryInit(tag)
 end
 
 local function onGameStart()
+    if Translator and Translator.loadFiles then
+        pcall(Translator.loadFiles)
+        local raw = (getText and getText("UI_We_Switch")) or "n/a"
+        local lang = "unknown"
+        if Translator.getLanguage then
+            local t = Translator.getLanguage()
+            if t and t.name then lang = tostring(t:name()) end
+        end
+        print("[We][I18N] onGameStart after Translator.loadFiles lang=" .. tostring(lang)
+            .. " getText(UI_We_Switch)=" .. tostring(raw))
+    end
     if tryInit("OnGameStart") then return end
     print("[We][Init] Delayed init enabled")
 end

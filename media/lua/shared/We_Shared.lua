@@ -15,7 +15,7 @@ We.STATS_KEYS = {
 -- Returns a fresh, empty slot table (slot.x == nil means "never saved")
 function We.defaultSlot(index)
     return {
-        name      = "Character " .. index,
+        name      = We.getText and We.getText("UI_We_DefaultCharacter", tostring(index)) or ("Character " .. tostring(index)),
         x         = nil, y = nil, z = nil,
         stats     = {},
         moodles   = {},
@@ -50,102 +50,94 @@ function We.defaultSlot(index)
 end
 
 -- ─── Translations ─────────────────────────────────────────────────────────────
--- Loaded directly in Lua to bypass B42 file-based translation discovery.
-
-local T = {
-    EN = {
-        UI_We_Switch              = "Switch",
-        UI_We_NeverUsed           = "Not used yet",
-        UI_We_SwitchedTo          = "Switched to: ",
-        UI_We_SetHome             = "Set as Safehouse",
-        UI_We_HomeSet             = "Safehouse set!",
-        UI_We_RemoveHome          = "Remove Safehouse",
-        UI_We_HomeRemoved         = "Safehouse removed.",
-        UI_We_Status_AtBase       = "Inside safehouse  —  switching available",
-        UI_We_Status_NoHome       = "Right-click any tile to set your safehouse",
-        UI_We_Status_TooFar       = "Return to your safehouse to switch",
-        UI_We_Switch_noSafehouse  = "You must be inside your safehouse to switch!",
-        UI_We_NewChar_Title       = "New Character",
-        UI_We_NPC_AtHome          = "[ NPC: at safehouse ]",
-        UI_We_NPC_Unspawned       = "[ NPC: not yet spawned ]",
-        UI_We_Tab_Faction         = "Faction",
-        UI_We_Tab_Characters      = "Characters",
-        UI_We_EmptySlot           = "[ + New Character ]",
-        UI_We_CreateChar          = "Create",
-        UI_We_Kick                = "Dismiss",
-        UI_We_Kick_Confirm        = "Are you sure you want to dismiss %1?",
-        UI_We_Kick_Done           = "Character dismissed: %1",
-        UI_We_Portrait_Profession = "Profession:",
-        UI_We_Portrait_Perks      = "Perks:",
-        UI_We_Portrait_None       = "none",
-        UI_We_Inspect             = "Inspect",
-        UI_We_CheckHealth         = "Check health",
-        UI_We_Inspect_Done        = "Wounds treated: %1",
-        UI_We_Inspect_NoWounds    = "No untreated wounds: %1",
-        UI_We_CheckHealth_Title   = "Health check: %1",
-        UI_We_CheckHealth_Treat   = "Treat wounds?",
-        UI_We_Treatment_Title     = "Medical: %1",
-        UI_We_Treatment_None      = "No wounds",
-        UI_We_Treatment_Bandage   = "Bandage",
-        UI_We_Treatment_Disinfect = "Disinfect",
-        UI_We_Treatment_Stitch    = "Stitch",
-        UI_We_Treatment_Splint    = "Splint",
-        UI_We_Treatment_All       = "Treat all",
-    },
-    RU = {
-        UI_We_Switch              = "Играть",
-        UI_We_NeverUsed           = "Ещё не использован",
-        UI_We_SwitchedTo          = "Переключено на: ",
-        UI_We_SetHome             = "Назначить сейвхаус",
-        UI_We_HomeSet             = "Сейвхаус назначен!",
-        UI_We_RemoveHome          = "Удалить сейвхаус",
-        UI_We_HomeRemoved         = "Сейвхаус удалён.",
-        UI_We_Status_AtBase       = "В сейвхаусе  —  переключение доступно",
-        UI_We_Status_NoHome       = "Нажмите ПКМ на любой тайл чтобы назначить сейвхаус",
-        UI_We_Status_TooFar       = "Вернитесь в сейвхаус для переключения",
-        UI_We_Switch_noSafehouse  = "Для переключения нужно быть в сейвхаусе!",
-        UI_We_NewChar_Title       = "Новый персонаж",
-        UI_We_NPC_AtHome          = "[ NPC: в сейвхаусе ]",
-        UI_We_NPC_Unspawned       = "[ NPC: ещё не заспавнен ]",
-        UI_We_Tab_Faction         = "Фракция",
-        UI_We_Tab_Characters      = "Персонажи",
-        UI_We_EmptySlot           = "[ + Новый персонаж ]",
-        UI_We_CreateChar          = "Создать",
-        UI_We_Kick                = "Выгнать",
-        UI_We_Kick_Confirm        = "Вы точно хотите выгнать %1?",
-        UI_We_Kick_Done           = "Персонаж выгнан: %1",
-        UI_We_Portrait_Profession = "Профессия:",
-        UI_We_Portrait_Perks      = "Перки:",
-        UI_We_Portrait_None       = "нет",
-        UI_We_Inspect             = "Осмотреть",
-        UI_We_CheckHealth         = "Проверить состояние здоровья",
-        UI_We_Inspect_Done        = "Раны обработаны: %1",
-        UI_We_Inspect_NoWounds    = "Необработанных ран нет: %1",
-        UI_We_CheckHealth_Title   = "Состояние здоровья: %1",
-        UI_We_CheckHealth_Treat   = "Обработать раны?",
-        UI_We_Treatment_Title     = "Осмотр: %1",
-        UI_We_Treatment_None      = "Ран нет",
-        UI_We_Treatment_Bandage   = "Перевязать",
-        UI_We_Treatment_Disinfect = "Дезинфицировать",
-        UI_We_Treatment_Stitch    = "Зашить",
-        UI_We_Treatment_Splint    = "Наложить шину",
-        UI_We_Treatment_All       = "Лечить все",
-    },
+-- Use the game's standard translation loader from media/lua/shared/Translate/*.
+local FALLBACK_EN = {
+    UI_We_DefaultCharacter = "Character %1",
+    UI_We_Switch = "Switch",
+    UI_We_NeverUsed = "Not used yet",
+    UI_We_SwitchedTo = "Switched to: ",
+    UI_We_SetHome = "Set as Safehouse",
+    UI_We_HomeSet = "Safehouse set!",
+    UI_We_RemoveHome = "Remove Safehouse",
+    UI_We_HomeRemoved = "Safehouse removed.",
+    UI_We_Status_AtBase = "Inside safehouse  -  switching available",
+    UI_We_Status_NoHome = "Right-click any tile to set your safehouse",
+    UI_We_Status_TooFar = "Return to your safehouse to switch",
+    UI_We_Status_PostDeath = "Post-death switch available",
+    UI_We_Switch_noSafehouse = "You must be inside your safehouse to switch!",
+    UI_We_NewChar_Title = "New Character",
+    UI_We_NPC_AtHome = "[ NPC: at safehouse ]",
+    UI_We_NPC_Unspawned = "[ NPC: not yet spawned ]",
+    UI_We_Tab_Faction = "Faction",
+    UI_We_Tab_Characters = "Characters",
+    UI_We_EmptySlot = "[ + New Character ]",
+    UI_We_CreateChar = "Create",
+    UI_We_Kick = "Dismiss",
+    UI_We_Kick_Confirm = "Are you sure you want to dismiss %1?",
+    UI_We_Kick_Done = "Character dismissed: %1",
+    UI_We_Portrait_Profession = "Profession:",
+    UI_We_Portrait_Perks = "Perks:",
+    UI_We_Portrait_None = "none",
+    UI_We_Moodles = "Moodles",
+    UI_We_Inspect = "Inspect",
+    UI_We_CheckHealth = "Check health",
+    UI_We_Inspect_Done = "Wounds treated: %1",
+    UI_We_Inspect_NoWounds = "No untreated wounds: %1",
+    UI_We_CheckHealth_Title = "Health check: %1",
+    UI_We_CheckHealth_Treat = "Treat wounds?",
+    UI_We_Treatment_Title = "Medical: %1",
+    UI_We_Treatment_None = "No wounds",
+    UI_We_Treatment_Bandage = "Bandage",
+    UI_We_Treatment_Disinfect = "Disinfect",
+    UI_We_Treatment_Stitch = "Stitch",
+    UI_We_Treatment_Splint = "Splint",
+    UI_We_Treatment_All = "Treat all",
+    UI_We_SlotFallback = "Slot %1",
+    UI_We_Health_NoWounds = "No wounds",
+    UI_We_Health_Wounds = "Wounds: %1",
+    UI_We_Health_Untreated = "Untreated: %1",
+    UI_We_Health_Part = "Part #%1",
+    UI_We_Health_Level = "Lv.%1",
+    UI_We_Health_ActionOk = "OK",
+    UI_We_Health_TreatAnyway = "Treat anyway",
+    UI_We_Wound_Scratch = "scratch",
+    UI_We_Wound_Cut = "cut",
+    UI_We_Wound_Laceration = "laceration",
+    UI_We_Wound_DeepWound = "deep wound",
+    UI_We_Wound_Fracture = "fracture",
+    UI_We_Wound_Bleeding = "bleeding",
+    UI_We_Wound_Infected = "infected",
+    UI_We_Moodle_Hunger = "Hunger",
+    UI_We_Moodle_Thirst = "Thirst",
+    UI_We_Moodle_Exertion = "Exertion",
+    UI_We_Moodle_Fatigue = "Fatigue",
+    UI_We_Moodle_Stress = "Stress",
+    UI_We_Moodle_Pain = "Pain",
+    UI_We_Moodle_Boredom = "Boredom",
+    UI_We_Moodle_Unhappy = "Unhappy",
+    UI_We_Moodle_Panic = "Panic",
+    UI_We_Moodle_Sick = "Sick",
+    UI_We_Moodle_Hyperthermia = "Hyperthermia",
+    UI_We_Moodle_Hypothermia = "Hypothermia",
+    UI_We_Moodle_HeavyLoad = "Heavy Load",
+    UI_We_Moodle_Bleeding = "Bleeding",
+    UI_We_Moodle_Wet = "Wet",
+    UI_We_Moodle_Cold = "Cold",
+    UI_We_Moodle_Windchill = "Windchill",
+    UI_We_Moodle_Injured = "Injured",
 }
 
-local function detectLang()
-    if not Translator then return "EN" end
-    local tLang = Translator.getLanguage and Translator.getLanguage()
-    if not tLang then return "EN" end
-    return tostring(tLang:name())
-end
 
 function We.getText(key, ...)
-    local lang = detectLang()
-    local tbl  = T[lang] or T["EN"]
-    local str  = (tbl and tbl[key]) or (T["EN"][key]) or key
-    local args = {...}
-    if #args > 0 then
+    if getText then
+        local ok, text = pcall(getText, key, ...)
+        if ok and text and text ~= key then
+            return text
+        end
+    end
+    local str = FALLBACK_EN[key] or key
+    local args = { ... }
+    if #args > 0 and type(str) == "string" then
         str = str:gsub("%%(%d+)", function(n)
             return tostring(args[tonumber(n)] or "")
         end)
@@ -153,4 +145,19 @@ function We.getText(key, ...)
     return str
 end
 
+local function logTranslationProbe(tag)
+    local lang = "unknown"
+    if Translator and Translator.getLanguage then
+        local t = Translator.getLanguage()
+        if t and t.name then lang = tostring(t:name()) end
+    end
+    local raw = "n/a"
+    if getText then
+        local ok, txt = pcall(getText, "UI_We_Switch")
+        if ok then raw = tostring(txt) end
+    end
+    print("[We][I18N] " .. tostring(tag) .. " lang=" .. tostring(lang) .. " getText(UI_We_Switch)=" .. tostring(raw))
+end
+
 print("[We] Shared loaded. Version: " .. We.Version)
+logTranslationProbe("shared_load")

@@ -1205,7 +1205,10 @@ function WeData.init()
                         -- Seed default slot name from descriptor once (for legacy saves where
                         -- slot still has "Character N"). Keep stable afterwards.
                         local curName = tostring(slot.name or "")
-                        if curName == "" or curName == ("Character " .. tostring(data.activeSlot)) then
+                        local localizedDefault = We.getText and We.getText("UI_We_DefaultCharacter", tostring(data.activeSlot))
+                            or ("Character " .. tostring(data.activeSlot))
+                        local legacyDefault = "Character " .. tostring(data.activeSlot)
+                        if curName == "" or curName == localizedDefault or curName == legacyDefault then
                             local fore = desc:getForename() or ""
                             local sur  = desc:getSurname() or ""
                             local full = (fore .. " " .. sur):match("^%s*(.-)%s*$")

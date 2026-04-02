@@ -181,7 +181,7 @@ function WeRosterPanel:initialise()
     self:addChild(self.profLabel)
     self.perksLabel = ISLabel:new(portraitX, self.profLabel.y + 24, 16, We.getText("UI_We_Portrait_Perks"), 0.75, 0.90, 0.75, 1, UIFont.Small, true)
     self:addChild(self.perksLabel)
-    self.moodlesLabel = ISLabel:new(portraitX, self.perksLabel.y + 38, 16, "Moodles", 0.85, 0.80, 0.95, 1, UIFont.Small, true)
+    self.moodlesLabel = ISLabel:new(portraitX, self.perksLabel.y + 38, 16, We.getText("UI_We_Moodles"), 0.85, 0.80, 0.95, 1, UIFont.Small, true)
     self:addChild(self.moodlesLabel)
     self.profIcon = nil
     self.perkIcons = {}
@@ -364,6 +364,12 @@ function WeRosterPanel:clearProfessionIcon()
     end
 end
 
+function WeRosterPanel:setPortraitDetailsVisible(visible)
+    if self.profLabel then self.profLabel:setVisible(visible == true) end
+    if self.perksLabel then self.perksLabel:setVisible(visible == true) end
+    if self.moodlesLabel then self.moodlesLabel:setVisible(visible == true) end
+end
+
 function WeRosterPanel:addTraitIcons(slot)
     self:clearTraitIcons()
     if not slot then return end
@@ -426,24 +432,24 @@ function WeRosterPanel:addMoodleIcons(slot, slotIndex)
     if not slot then return end
 
     local moodleDefs = {
-        { key = "Hungry", text = "Hunger", mt = MoodleType.HUNGRY, stat = "Hunger", textureKeys = {"Hungry"} },
-        { key = "Thirst", text = "Thirst", mt = MoodleType.THIRST, stat = "Thirst", textureKeys = {"Thirst", "Thirsty"} },
-        { key = "Endurance", text = "Exertion", mt = MoodleType.ENDURANCE, stat = "Endurance", textureKeys = {"Endurance", "HeavyLoad"} },
-        { key = "Tired", text = "Fatigue", mt = MoodleType.TIRED, stat = "Fatigue", textureKeys = {"Tired"} },
-        { key = "Stress", text = "Stress", mt = MoodleType.STRESS, stat = "Stress", textureKeys = {"Stress"} },
-        { key = "Pain", text = "Pain", mt = MoodleType.PAIN, stat = "Pain", textureKeys = {"Pain"} },
-        { key = "Bored", text = "Boredom", mt = MoodleType.BORED, stat = "Boredom", textureKeys = {"Bored", "Unhappy"} },
-        { key = "Unhappy", text = "Unhappy", mt = MoodleType.UNHAPPY, textureKeys = {"Unhappy", "Bored"} },
-        { key = "Panic", text = "Panic", mt = MoodleType.PANIC, textureKeys = {"Panic"} },
-        { key = "Sick", text = "Sick", mt = MoodleType.SICK, textureKeys = {"Sick"} },
-        { key = "Hyperthermia", text = "Hyperthermia", mt = MoodleType.HYPERTHERMIA, textureKeys = {"Hyperthermia"} },
-        { key = "Hypothermia", text = "Hypothermia", mt = MoodleType.HYPOTHERMIA, textureKeys = {"Hypothermia", "Cold"} },
-        { key = "HeavyLoad", text = "Heavy Load", mt = MoodleType.HEAVY_LOAD, textureKeys = {"HeavyLoad", "Endurance"} },
-        { key = "Bleeding", text = "Bleeding", mt = MoodleType.BLEEDING, textureKeys = {"Bleeding", "Pain"} },
-        { key = "Wet", text = "Wet", mt = MoodleType.WET, textureKeys = {"Wet", "Sick"} },
-        { key = "HasACold", text = "Cold", mt = MoodleType.HAS_A_COLD, textureKeys = {"HasACold", "Sick"} },
-        { key = "Windchill", text = "Windchill", mt = MoodleType.WINDCHILL, textureKeys = {"Windchill", "Cold"} },
-        { key = "Injured", text = "Injured", mt = MoodleType.INJURED, textureKeys = {"Injured", "Pain"} },
+        { key = "Hungry", text = We.getText("UI_We_Moodle_Hunger"), mt = MoodleType.HUNGRY, stat = "Hunger", textureKeys = {"Hungry"} },
+        { key = "Thirst", text = We.getText("UI_We_Moodle_Thirst"), mt = MoodleType.THIRST, stat = "Thirst", textureKeys = {"Thirst", "Thirsty"} },
+        { key = "Endurance", text = We.getText("UI_We_Moodle_Exertion"), mt = MoodleType.ENDURANCE, stat = "Endurance", textureKeys = {"Endurance", "HeavyLoad"} },
+        { key = "Tired", text = We.getText("UI_We_Moodle_Fatigue"), mt = MoodleType.TIRED, stat = "Fatigue", textureKeys = {"Tired"} },
+        { key = "Stress", text = We.getText("UI_We_Moodle_Stress"), mt = MoodleType.STRESS, stat = "Stress", textureKeys = {"Stress"} },
+        { key = "Pain", text = We.getText("UI_We_Moodle_Pain"), mt = MoodleType.PAIN, stat = "Pain", textureKeys = {"Pain"} },
+        { key = "Bored", text = We.getText("UI_We_Moodle_Boredom"), mt = MoodleType.BORED, stat = "Boredom", textureKeys = {"Bored", "Unhappy"} },
+        { key = "Unhappy", text = We.getText("UI_We_Moodle_Unhappy"), mt = MoodleType.UNHAPPY, textureKeys = {"Unhappy", "Bored"} },
+        { key = "Panic", text = We.getText("UI_We_Moodle_Panic"), mt = MoodleType.PANIC, textureKeys = {"Panic"} },
+        { key = "Sick", text = We.getText("UI_We_Moodle_Sick"), mt = MoodleType.SICK, textureKeys = {"Sick"} },
+        { key = "Hyperthermia", text = We.getText("UI_We_Moodle_Hyperthermia"), mt = MoodleType.HYPERTHERMIA, textureKeys = {"Hyperthermia"} },
+        { key = "Hypothermia", text = We.getText("UI_We_Moodle_Hypothermia"), mt = MoodleType.HYPOTHERMIA, textureKeys = {"Hypothermia", "Cold"} },
+        { key = "HeavyLoad", text = We.getText("UI_We_Moodle_HeavyLoad"), mt = MoodleType.HEAVY_LOAD, textureKeys = {"HeavyLoad", "Endurance"} },
+        { key = "Bleeding", text = We.getText("UI_We_Moodle_Bleeding"), mt = MoodleType.BLEEDING, textureKeys = {"Bleeding", "Pain"} },
+        { key = "Wet", text = We.getText("UI_We_Moodle_Wet"), mt = MoodleType.WET, textureKeys = {"Wet", "Sick"} },
+        { key = "HasACold", text = We.getText("UI_We_Moodle_Cold"), mt = MoodleType.HAS_A_COLD, textureKeys = {"HasACold", "Sick"} },
+        { key = "Windchill", text = We.getText("UI_We_Moodle_Windchill"), mt = MoodleType.WINDCHILL, textureKeys = {"Windchill", "Cold"} },
+        { key = "Injured", text = We.getText("UI_We_Moodle_Injured"), mt = MoodleType.INJURED, textureKeys = {"Injured", "Pain"} },
     }
 
     local function getMoodleTexture(def)
@@ -515,7 +521,7 @@ function WeRosterPanel:addMoodleIcons(slot, slotIndex)
             img:initialise()
             img:setVisible(true)
             if img.setMouseOverText then
-                img:setMouseOverText(m.text .. " Lv." .. tostring(level))
+                img:setMouseOverText(m.text .. " " .. We.getText("UI_We_Health_Level", tostring(level)))
             end
             self:addChild(img)
             self.moodleIcons[#self.moodleIcons + 1] = img
@@ -541,7 +547,7 @@ function WeRosterPanel:addMoodleIcons(slot, slotIndex)
                     img:initialise()
                     img:setVisible(true)
                     if img.setMouseOverText then
-                        img:setMouseOverText(tostring(k) .. " Lv." .. tostring(level))
+                        img:setMouseOverText(tostring(k) .. " " .. We.getText("UI_We_Health_Level", tostring(level)))
                     end
                     self:addChild(img)
                     self.moodleIcons[#self.moodleIcons + 1] = img
@@ -556,12 +562,13 @@ function WeRosterPanel:updatePortraitForSlot(slotIndex)
     if not slotIndex then
         self.profLabel.name = We.getText("UI_We_Portrait_Profession")
         self.perksLabel.name = We.getText("UI_We_Portrait_Perks")
-        self.moodlesLabel.name = "Moodles"
+        self.moodlesLabel.name = We.getText("UI_We_Moodles")
         self:clearProfessionIcon()
         self:clearTraitIcons()
         self:clearMoodleIcons()
         self._portraitShowIn = nil
         if self.portraitPanel then self.portraitPanel:setVisible(false) end
+        self:setPortraitDetailsVisible(false)
         return
     end
     local slot = WeData.getSlot(slotIndex)
@@ -649,10 +656,16 @@ function WeRosterPanel:updatePortraitForSlot(slotIndex)
     local traitCount = #(slot.traits or {})
     local traitRows = math.max(1, math.ceil(traitCount / 3))
     self.moodlesLabel:setY(self.perksLabel.y + 20 + traitRows * 18 + 4)
-    self.moodlesLabel.name = "Moodles"
+    self.moodlesLabel.name = We.getText("UI_We_Moodles")
     self:addMoodleIcons(slot, slotIndex)
     if self.portraitPanel and not self._portraitDisabled then
         self.portraitPanel:setVisible(true)
+        self:setPortraitDetailsVisible(true)
+    else
+        self:clearProfessionIcon()
+        self:clearTraitIcons()
+        self:clearMoodleIcons()
+        self:setPortraitDetailsVisible(false)
     end
 end
 
@@ -678,15 +691,11 @@ function WeRosterPanel:refreshRows()
     -- Keep portrait/traits/moodles behavior identical for alive and post-death modes.
     if self.slotList then
         self.slotList:setWidth(self.width - PORTRAIT_W - PADDING - 8)
-        if self.portraitPanel and not self._portraitDisabled then self.portraitPanel:setVisible(true) end
-        self.profLabel:setVisible(true)
-        self.perksLabel:setVisible(true)
-        self.moodlesLabel:setVisible(true)
     end
 
     -- Status label
     if deathMode then
-        self.baseStatusLabel.name = "Post-death switch available"
+        self.baseStatusLabel.name = We.getText("UI_We_Status_PostDeath")
         self.baseStatusLabel.r, self.baseStatusLabel.g, self.baseStatusLabel.b = 0.3, 0.9, 0.4
     elseif atBase then
         self.baseStatusLabel.name = We.getText("UI_We_Status_AtBase")
@@ -852,7 +861,7 @@ function WeRosterPanel:onKickClick(slotIndex)
     if not slot then return end
     if slotIndex == WeData.getActiveSlot() then return end
 
-    local displayName = tostring(slot.name or ("Slot " .. tostring(slotIndex)))
+    local displayName = tostring(slot.name or We.getText("UI_We_SlotFallback", tostring(slotIndex)))
     local msg = We.getText("UI_We_Kick_Confirm", displayName)
     local modal = ISModalDialog:new(
         getCore():getScreenWidth() / 2 - 170,

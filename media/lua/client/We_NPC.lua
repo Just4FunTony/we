@@ -290,7 +290,7 @@ function WeNPC.inspectResident(slotIndex)
     slot.bodyDamage = wounds
 
     local p = getSpecificPlayer(0)
-    local name = tostring(slot.name or ("Slot " .. tostring(slotIndex)))
+    local name = tostring(slot.name or We.getText("UI_We_SlotFallback", tostring(slotIndex)))
     if p then
         if changed > 0 then
             HaloTextHelper.addGoodText(p, We.getText("UI_We_Inspect_Done", name))
@@ -309,12 +309,12 @@ local function buildHealthCheckText(slot)
     for _, e in pairs(wounds) do
         if e then
             local tags = {}
-            if e.scratch then tags[#tags + 1] = "scratch" end
-            if e.cut then tags[#tags + 1] = "cut" end
-            if e.deepWound then tags[#tags + 1] = "deep wound" end
-            if e.fracture then tags[#tags + 1] = "fracture" end
-            if e.bleeding then tags[#tags + 1] = "bleeding" end
-            if (tonumber(e.infLevel) or 0) > 0.01 then tags[#tags + 1] = "infected" end
+            if e.scratch then tags[#tags + 1] = We.getText("UI_We_Wound_Scratch") end
+            if e.cut then tags[#tags + 1] = We.getText("UI_We_Wound_Cut") end
+            if e.deepWound then tags[#tags + 1] = We.getText("UI_We_Wound_DeepWound") end
+            if e.fracture then tags[#tags + 1] = We.getText("UI_We_Wound_Fracture") end
+            if e.bleeding then tags[#tags + 1] = We.getText("UI_We_Wound_Bleeding") end
+            if (tonumber(e.infLevel) or 0) > 0.01 then tags[#tags + 1] = We.getText("UI_We_Wound_Infected") end
             if #tags > 0 then
                 total = total + 1
                 local isUntreated = false
@@ -328,10 +328,11 @@ local function buildHealthCheckText(slot)
     end
 
     if total == 0 then
-        return "No wounds", untreated
+        return We.getText("UI_We_Health_NoWounds"), untreated
     end
 
-    local head = "Wounds: " .. tostring(total) .. "\nUntreated: " .. tostring(untreated)
+    local head = We.getText("UI_We_Health_Wounds", tostring(total))
+        .. "\n" .. We.getText("UI_We_Health_Untreated", tostring(untreated))
     return head .. "\n\n" .. table.concat(lines, "\n"), untreated
 end
 
@@ -342,17 +343,18 @@ local function collectWounds(slot)
     for idx, e in pairs(slot.bodyDamage or {}) do
         if e then
             local tags = {}
-            if e.scratch then tags[#tags + 1] = "scratch" end
-            if e.cut then tags[#tags + 1] = "cut" end
-            if e.laceration then tags[#tags + 1] = "laceration" end
-            if e.deepWound then tags[#tags + 1] = "deep wound" end
-            if e.fracture then tags[#tags + 1] = "fracture" end
-            if e.bleeding then tags[#tags + 1] = "bleeding" end
-            if (tonumber(e.infLevel) or 0) > 0.01 then tags[#tags + 1] = "infected" end
+            if e.scratch then tags[#tags + 1] = We.getText("UI_We_Wound_Scratch") end
+            if e.cut then tags[#tags + 1] = We.getText("UI_We_Wound_Cut") end
+            if e.laceration then tags[#tags + 1] = We.getText("UI_We_Wound_Laceration") end
+            if e.deepWound then tags[#tags + 1] = We.getText("UI_We_Wound_DeepWound") end
+            if e.fracture then tags[#tags + 1] = We.getText("UI_We_Wound_Fracture") end
+            if e.bleeding then tags[#tags + 1] = We.getText("UI_We_Wound_Bleeding") end
+            if (tonumber(e.infLevel) or 0) > 0.01 then tags[#tags + 1] = We.getText("UI_We_Wound_Infected") end
             if #tags > 0 then
                 out[#out + 1] = {
                     idx = idx,
-                    text = "Part #" .. tostring((tonumber(idx) or 0) + 1) .. ": " .. table.concat(tags, ", "),
+                    text = We.getText("UI_We_Health_Part", tostring((tonumber(idx) or 0) + 1))
+                        .. ": " .. table.concat(tags, ", "),
                     data = e,
                 }
             end
@@ -407,7 +409,7 @@ local function openTreatmentPanel(slotIndex)
         WeTreatmentPanel = nil
     end
 
-    local title = We.getText("UI_We_Treatment_Title", tostring(slot.name or ("Slot " .. tostring(slotIndex))))
+    local title = We.getText("UI_We_Treatment_Title", tostring(slot.name or We.getText("UI_We_SlotFallback", tostring(slotIndex))))
     local win = ISCollapsableWindow:new(getCore():getScreenWidth()/2 - 210, getCore():getScreenHeight()/2 - 170, 420, 340)
     win:initialise()
     win:setTitle(title)
@@ -504,7 +506,7 @@ function WeNPC.openHealthCheck(slotIndex)
     local slot = data.slots[slotIndex]
     if not slot then return end
 
-    local displayName = tostring(slot.name or ("Slot " .. tostring(slotIndex)))
+    local displayName = tostring(slot.name or We.getText("UI_We_SlotFallback", tostring(slotIndex)))
     local report, untreated = buildHealthCheckText(slot)
     local msg = We.getText("UI_We_CheckHealth_Title", displayName) .. "\n\n"
         .. report .. "\n\n" .. We.getText("UI_We_CheckHealth_Treat")
@@ -531,8 +533,8 @@ function WeNPC.openHealthCheck(slotIndex)
 
     if untreated <= 0 then
         -- If no untreated wounds, keep window informational (no action needed).
-        if modal.no then modal.no:setTitle("OK") end
-        if modal.yes then modal.yes:setTitle("Treat anyway") end
+        if modal.no then modal.no:setTitle(We.getText("UI_We_Health_ActionOk")) end
+        if modal.yes then modal.yes:setTitle(We.getText("UI_We_Health_TreatAnyway")) end
     end
 end
 
