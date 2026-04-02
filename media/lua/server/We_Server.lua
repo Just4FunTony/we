@@ -8,6 +8,11 @@ local function applyAppearance(zombie, app)
     local vis = zombie:getHumanVisual()
     if not vis then return end
 
+    local skipHumanLs = instanceof(zombie, "IsoZombie") and app.clothingVisuals and #app.clothingVisuals > 0
+    if app.humanVisualLS and vis.loadLastStandString and not skipHumanLs then
+        pcall(vis.loadLastStandString, vis, app.humanVisualLS)
+    end
+
     if app.skinTexture and app.skinTexture ~= "" then
         vis:setSkinTextureName(app.skinTexture)
     end
@@ -22,7 +27,17 @@ local function applyAppearance(zombie, app)
 
     local iv = zombie:getItemVisuals()
     iv:clear()
-    if app.itemVisuals then
+    if app.clothingVisuals and #app.clothingVisuals > 0 then
+        for _, ls in ipairs(app.clothingVisuals) do
+            local item = ItemVisual.createLastStandItem and ItemVisual.createLastStandItem(ls)
+            if item and item.getVisual then
+                local itemVis = item:getVisual()
+                if itemVis then
+                    pcall(iv.add, iv, itemVis)
+                end
+            end
+        end
+    elseif app.itemVisuals then
         for _, itemType in ipairs(app.itemVisuals) do
             local ivItem = ItemVisual.new()
             ivItem:setItemType(itemType)
@@ -44,14 +59,6 @@ local function applyAppearance(zombie, app)
         end
     end
     if ai and ai.clear then pcall(ai.clear, ai) end
-
-    -- Remove blood / dirt so NPC looks like a living survivor
-    local maxIdx = BloodBodyPartType.MAX:index()
-    for i = 0, maxIdx - 1 do
-        local part = BloodBodyPartType.FromIndex(i)
-        vis:setBlood(part, 0)
-        vis:setDirt(part, 0)
-    end
 
     zombie:resetModelNextFrame()
     zombie:resetModel()

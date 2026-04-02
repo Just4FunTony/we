@@ -33,9 +33,13 @@ function WeNPC.captureAppearance(player)
     local app = {}
     app.female      = player:isFemale()
     app.itemVisuals = {}
+    app.clothingVisuals = {}
 
     local vis = player:getHumanVisual()
     if vis then
+        if vis.getLastStandString then
+            app.humanVisualLS = vis:getLastStandString()
+        end
         local st = vis:getSkinTexture()
         app.skinTexture = (st and st ~= "") and tostring(st) or nil
         app.hairStyle   = vis:getHairModel()
@@ -45,6 +49,41 @@ function WeNPC.captureAppearance(player)
             app.beardStyle = vis:getBeardModel()
             local bc = vis:getBeardColor()
             if bc then app.beardColor = {r=bc:getRedFloat(), g=bc:getGreenFloat(), b=bc:getBlueFloat()} end
+        end
+    end
+
+    -- Exact worn visuals snapshot (preserves tint, dirt, blood, patches, etc).
+    local ivContainer = ItemVisuals and ItemVisuals.new()
+    if ivContainer then
+        player:getItemVisuals(ivContainer)
+        for i = 0, ivContainer:size() - 1 do
+            local iv = ivContainer:get(i)
+            if iv and iv.getLastStandString then
+                local s = iv:getLastStandString()
+                if s and s ~= "" then
+                    table.insert(app.clothingVisuals, s)
+                end
+            end
+        end
+    end
+
+    -- B42: getItemVisuals can be empty briefly; fall back to each worn item's ItemVisual string.
+    if #app.clothingVisuals == 0 then
+        local worn = player.getWornItems and player:getWornItems()
+        if worn and worn.size then
+            for i = 0, worn:size() - 1 do
+                local wi = worn.get and worn:get(i) or nil
+                local item = wi and wi.getItem and wi:getItem() or nil
+                if item and item.getVisual then
+                    local v = item:getVisual()
+                    if v and v.getLastStandString then
+                        local s = v:getLastStandString()
+                        if s and s ~= "" then
+                            table.insert(app.clothingVisuals, s)
+                        end
+                    end
+                end
+            end
         end
     end
 
@@ -67,10 +106,40 @@ end
 -- ─── Visual application ────────────────────────────────────────────────────────
 -- Works on any IsoGameCharacter (IsoPlayer NPC or IsoZombie).
 
+-- Copy appearance for network commands so clothingVisuals stays a plain sequential array.
+function WeNPC.shallowAppearanceForBrain(app)
+    if not app then return nil end
+    local o = {
+        female = app.female,
+        skinTexture = app.skinTexture,
+        hairStyle = app.hairStyle,
+        hairColor = app.hairColor,
+        beardStyle = app.beardStyle,
+        beardColor = app.beardColor,
+        humanVisualLS = app.humanVisualLS,
+        itemVisuals = app.itemVisuals,
+    }
+    local cv = {}
+    local src = app.clothingVisuals
+    if type(src) == "table" then
+        for i = 1, #src do
+            cv[i] = src[i]
+        end
+    end
+    o.clothingVisuals = cv
+    return o
+end
+
 function WeNPC.applyVisuals(char, app)
     if not app or not char or not char.getHumanVisual then return end
     local vis = char:getHumanVisual()
     if not vis then return end
+    -- Full-body LS on zombies then overwritten by itemVisuals still tends to reset clothing to "clean";
+    -- when we have per-piece LS, skip human LS and rely on skin/hair fields + clothingVisuals.
+    local skipHumanLs = instanceof(char, "IsoZombie") and app.clothingVisuals and #app.clothingVisuals > 0
+    if app.humanVisualLS and vis.loadLastStandString and not skipHumanLs then
+        pcall(vis.loadLastStandString, vis, app.humanVisualLS)
+    end
 
     -- setFemaleEtc exists on IsoZombie; IsoSurvivor/IsoPlayer use setFemale via descriptor
     if char.setFemaleEtc then char:setFemaleEtc(app.female or false) end
@@ -90,7 +159,17 @@ function WeNPC.applyVisuals(char, app)
     local itemVisuals = char.getItemVisuals and char:getItemVisuals()
     if itemVisuals then
         itemVisuals:clear()
-        if app.itemVisuals then
+        if app.clothingVisuals and #app.clothingVisuals > 0 then
+            for _, ls in ipairs(app.clothingVisuals) do
+                local item = ItemVisual.createLastStandItem and ItemVisual.createLastStandItem(ls)
+                if item and item.getVisual then
+                    local iv = item:getVisual()
+                    if iv then
+                        pcall(itemVisuals.add, itemVisuals, iv)
+                    end
+                end
+            end
+        elseif app.itemVisuals then
             for _, entry in ipairs(app.itemVisuals) do
                 local t = type(entry) == "table" and (entry.itemType or "") or tostring(entry)
                 local iv = ItemVisual.new()
@@ -99,14 +178,6 @@ function WeNPC.applyVisuals(char, app)
                 itemVisuals:add(iv)
             end
         end
-    end
-
-    -- Remove blood and dirt so the NPC looks like a living survivor
-    local maxIdx = BloodBodyPartType.MAX:index()
-    for i = 0, maxIdx - 1 do
-        local part = BloodBodyPartType.FromIndex(i)
-        vis:setBlood(part, 0)
-        vis:setDirt(part, 0)
     end
 
     char:resetModelNextFrame()
@@ -147,6 +218,16 @@ end
 -- ─── Brain builder ─────────────────────────────────────────────────────────────
 
 function WeNPC.buildBrain(slot, slotIndex)
+    local app = WeNPC.shallowAppearanceForBrain(slot.appearance)
+    -- If appearance snapshot missed clothing visuals, recover from serialized slot inventory.
+    if app and (not app.clothingVisuals or #app.clothingVisuals == 0) and slot and slot.inventory then
+        app.clothingVisuals = app.clothingVisuals or {}
+        for _, itemData in ipairs(slot.inventory) do
+            if itemData and itemData.lastStandStr then
+                app.clothingVisuals[#app.clothingVisuals + 1] = itemData.lastStandStr
+            end
+        end
+    end
     -- NPC anchors to the character's last saved position so they stay where you left them
     return {
         slotIndex  = slotIndex,
@@ -154,7 +235,7 @@ function WeNPC.buildBrain(slot, slotIndex)
         homeX      = slot.x or 0,
         homeY      = slot.y or 0,
         homeZ      = slot.z or 0,
-        appearance = slot.appearance,
+        appearance = app,
         female     = (slot.appearance and slot.appearance.female) or false,
     }
 end

@@ -4,6 +4,9 @@
 WeData = WeData or {}
 
 local modDataRef = nil   -- cached reference into getGameTime():getModData()
+-- Runtime-only item state cache by slot index.
+-- Keeps exact item objects (including container contents, blood/dirt/holes, attachments).
+local runtimeSlotState = {}
 
 -- B42 CharacterStat enum map (replaces the old stats:getHunger() API)
 local STAT_ENUM = {
@@ -39,9 +42,14 @@ local function dumpSlot(label, slot)
     local traits = slot.traits or {}
     local names = {}
     for _, t in ipairs(traits) do names[#names+1] = t end
+    local invCount = #(slot.inventory or {})
+    local app = slot.appearance or {}
+    local appClothes = #(app.clothingVisuals or {})
     print("[We] " .. label
         .. " | slot.traits=" .. #traits
         .. " | slot.prof=" .. tostring(slot.profession)
+        .. " | inv=" .. tostring(invCount)
+        .. " | app.clothes=" .. tostring(appClothes)
         .. " | list=[" .. table.concat(names, ", ") .. "]")
 end
 
@@ -170,6 +178,534 @@ local function writePlayerHealth100(player, value)
             pcall(player.setHealth, player, hp / 100)
         end
     end
+end
+
+-- Move equipped hand items into main inventory (no world drop). Call before saveSlot on switch-out.
+local function clearHandsIntoInventory(player)
+    if not player then return end
+    if not player.removeFromHands then return end
+    pcall(function()
+        local p = player.getPrimaryHandItem and player:getPrimaryHandItem() or nil
+        if p then player:removeFromHands(p) end
+    end)
+    pcall(function()
+        local s = player.getSecondaryHandItem and player:getSecondaryHandItem() or nil
+        if s then player:removeFromHands(s) end
+    end)
+    if player.setPrimaryHandItem then pcall(player.setPrimaryHandItem, player, nil) end
+    if player.setSecondaryHandItem then pcall(player.setSecondaryHandItem, player, nil) end
+end
+
+-- Must be defined before captureRuntimeSlotItems / saveSlot — Lua 5.1 locals are not visible above declaration.
+local function inventoryItemRefAlive(item)
+    if not item then return false end
+    local ok, ft = pcall(function() return item:getFullType() end)
+    return ok and type(ft) == "string" and ft ~= ""
+end
+
+local function captureRuntimeSlotItems(player, slotIndex)
+    if not player then return end
+    local inv = player.getInventory and player:getInventory()
+    local items = inv and inv.getItems and inv:getItems()
+    if not items then return end
+
+    local state = {
+        items = {},
+        worn = {},
+        attached = {},
+        primary = player.getPrimaryHandItem and player:getPrimaryHandItem() or nil,
+        secondary = player.getSecondaryHandItem and player:getSecondaryHandItem() or nil,
+    }
+
+    for i = 0, items:size() - 1 do
+        local item = items:get(i)
+        if item then
+            state.items[#state.items + 1] = item
+            local attachedSlot = item.getAttachedSlot and item:getAttachedSlot() or -1
+            if attachedSlot and attachedSlot > -1 then
+                state.attached[#state.attached + 1] = {
+                    item = item,
+                    slot = attachedSlot,
+                    slotType = item.getAttachedSlotType and item:getAttachedSlotType() or nil,
+                    model = item.getAttachedToModel and item:getAttachedToModel() or nil,
+                }
+            end
+        end
+    end
+
+    local worn = player.getWornItems and player:getWornItems()
+    if worn and worn.size then
+        for i = 0, worn:size() - 1 do
+            local wi = worn.get and worn:get(i) or nil
+            local item = wi and wi.getItem and wi:getItem() or (worn.getItemByIndex and worn:getItemByIndex(i)) or nil
+            if item then
+                local loc = nil
+                local wl = wi and wi.getLocation and wi:getLocation() or nil
+                if wl and wl.getId then
+                    loc = wl:getId()
+                elseif wl then
+                    loc = tostring(wl)
+                elseif item.getBodyLocation then
+                    loc = item:getBodyLocation()
+                end
+                if loc and loc ~= "" then
+                    state.worn[#state.worn + 1] = { item = item, location = tostring(loc) }
+                end
+            end
+        end
+    end
+
+    -- Fallback: B42 sometimes omits the backpack from getWornItems while getBodyLocation is set — still worn on body.
+    do
+        local seen = {}
+        for _, w in ipairs(state.worn) do
+            if w.item and w.item.getID then
+                local ok, id = pcall(function() return w.item:getID() end)
+                if ok and id then seen[id] = true end
+            end
+        end
+        for i = 0, items:size() - 1 do
+            local item = items:get(i)
+            if item and inventoryItemRefAlive(item) then
+                local ok, id = pcall(function() return item:getID() end)
+                if ok and id and not seen[id] then
+                    local loc = nil
+                    if item.getBodyLocation then
+                        local okbl, bl = pcall(function() return item:getBodyLocation() end)
+                        if okbl and bl and tostring(bl) ~= "" then loc = tostring(bl) end
+                    end
+                    if loc and loc ~= "" then
+                        state.worn[#state.worn + 1] = { item = item, location = loc }
+                        seen[id] = true
+                    end
+                end
+            end
+        end
+    end
+
+    runtimeSlotState[slotIndex] = state
+end
+
+-- Layer order: inner/torso before belts/holster, bag (Back) last — avoids backpack "falling off".
+local function bodyLocationWearSortKey(loc)
+    local l = tostring(loc or "")
+    if l == "Back" then return 950 end
+    if l:find("Holster", 1, true) then return 880 end
+    if l == "Belt" or l:find("Belt", 1, true) then return 860 end
+    if l:find("Jacket", 1, true) then return 780 end
+    if l:find("Sweater", 1, true) then return 760 end
+    if l == "Torso" or l == "ShortSleeveShirt" or l == "Tshirt" or l == "TankTop" then return 720 end
+    if l:find("Dress", 1, true) or l:find("FullSuit", 1, true) then return 710 end
+    if l == "Pants" or l == "Skirt" then return 400 end
+    if l == "Shoes" then return 350 end
+    if l == "Socks" then return 320 end
+    if l:find("Underwear", 1, true) then return 280 end
+    return 500
+end
+
+-- Stable string for ModData (getId() when available — matches CharacterCreation / portrait code).
+local function bodyLocationToSaveString(bl)
+    if bl == nil then return nil end
+    if type(bl) == "string" then
+        if bl == "" then return nil end
+        return bl
+    end
+    if bl.getId then
+        local ok, id = pcall(function() return bl:getId() end)
+        if ok and id and type(id) == "string" and id ~= "" then return id end
+    end
+    local ok, s = pcall(function() return tostring(bl) end)
+    if ok and type(s) == "string" and s ~= "" then return s end
+    return nil
+end
+
+-- B42: prefer ItemBodyLocation for setWornItem; keep string fallback if get() fails.
+local function resolveBodyLocationForSetWornItem(loc, item)
+    local raw = loc
+    if (raw == nil or raw == "") and item and item.getBodyLocation then
+        local ok, bl = pcall(function() return item:getBodyLocation() end)
+        if ok and bl then raw = bl end
+    end
+    if raw == nil or raw == "" then return nil end
+    if type(raw) ~= "string" then
+        return raw
+    end
+    if ItemBodyLocation and ResourceLocation and ItemBodyLocation.get and ResourceLocation.of then
+        local ok, enum = pcall(function()
+            return ItemBodyLocation.get(ResourceLocation.of(raw))
+        end)
+        if ok and enum then return enum end
+    end
+    return raw
+end
+
+local function wearSortKeyForOrder(locOrItem)
+    local s = bodyLocationToSaveString(locOrItem)
+    if s then return s end
+    return tostring(locOrItem or "")
+end
+
+local function sortWornEntries(wornList)
+    table.sort(wornList, function(a, b)
+        local al = a.location
+        if (al == nil or al == "") and a.item and a.item.getBodyLocation then
+            local ok, bl = pcall(function() return a.item:getBodyLocation() end)
+            if ok and bl then al = bl end
+        end
+        local blc = b.location
+        if (blc == nil or blc == "") and b.item and b.item.getBodyLocation then
+            local ok, bl = pcall(function() return b.item:getBodyLocation() end)
+            if ok and bl then blc = bl end
+        end
+        local la = wearSortKeyForOrder(al)
+        local lb = wearSortKeyForOrder(blc)
+        return bodyLocationWearSortKey(la) < bodyLocationWearSortKey(lb)
+    end)
+end
+
+local function resolveWornLocation(w)
+    if not w or not w.item then return nil end
+    local loc = w.location
+    if loc and loc ~= "" then return loc end
+    if w.item.getBodyLocation then
+        loc = w.item:getBodyLocation()
+    end
+    if loc and loc ~= "" then return loc end
+    return nil
+end
+
+-- Strip hotbar/back/holster attach metadata and engine links before re-attaching (avoids desync).
+-- Do NOT strip items that are worn: removeAttachedItem clears the Back slot — bags fall off.
+-- Match by ref AND by inventory ID — B42 sometimes gives different userdata for the same worn bag.
+local function stripAttachedMetadataOnItems(player, itemList, skipWornRefs, skipWornIds)
+    skipWornRefs = skipWornRefs or {}
+    skipWornIds = skipWornIds or {}
+    for _, item in ipairs(itemList or {}) do
+        if item then
+            local skip = skipWornRefs[item] == true
+            if not skip and item.getID then
+                local ok, id = pcall(function() return item:getID() end)
+                if ok and id and skipWornIds[id] then skip = true end
+            end
+            if not skip then
+                if item.setAttachedSlot then pcall(item.setAttachedSlot, item, -1) end
+                if item.setAttachedSlotType then pcall(item.setAttachedSlotType, item, nil) end
+                if item.setAttachedToModel then pcall(item.setAttachedToModel, item, nil) end
+                if player and player.removeAttachedItem then pcall(player.removeAttachedItem, player, item) end
+            end
+        end
+    end
+end
+
+-- IsoGameCharacter:setAttachedItem expects a location id from AttachedLocationGroup (e.g. from getAttachedToModel).
+-- getAttachedSlotType() values like "SmallBeltRight" are NOT valid here and throw "no such location" in Java.
+local function trySetAttachedItem(player, a)
+    if not (player and player.setAttachedItem and a and a.item) then return end
+    local loc = a.model
+    if type(loc) ~= "string" or loc == "" then return end
+    local ai = player.getAttachedItems and player:getAttachedItems() or nil
+    local grp = ai and ai.getGroup and ai:getGroup() or nil
+    local valid = false
+    if grp and grp.size and grp.getLocationByIndex then
+        for i = 0, grp:size() - 1 do
+            local l = grp:getLocationByIndex(i)
+            local id = l and l.getId and l:getId() or nil
+            if id == loc then
+                valid = true
+                break
+            end
+        end
+    end
+    if valid then
+        pcall(player.setAttachedItem, player, loc, a.item)
+    else
+        -- Group lookup can false-negative for some belt/back ids; try once (wrapped).
+        pcall(player.setAttachedItem, player, loc, a.item)
+    end
+end
+
+-- Re-apply worn order, hotbar attaches, and hands after resetModel / deferred model reset.
+local function applyWornAndAttachedFromState(player, state)
+    if not player or not state then return end
+    local worn = {}
+    for _, w in ipairs(state.worn or {}) do
+        worn[#worn + 1] = w
+    end
+    sortWornEntries(worn)
+    local wornSkip = {}
+    local wornSkipIds = {}
+    for _, w in ipairs(worn) do
+        if w.item then
+            wornSkip[w.item] = true
+            local ok, id = pcall(function() return w.item:getID() end)
+            if ok and id then wornSkipIds[id] = true end
+        end
+    end
+    for _, w in ipairs(worn) do
+        local loc = resolveWornLocation(w)
+        local bl = resolveBodyLocationForSetWornItem(loc, w.item)
+        if bl and w.item and player.setWornItem then
+            pcall(player.setWornItem, player, bl, w.item)
+        end
+    end
+
+    stripAttachedMetadataOnItems(player, state.items, wornSkip, wornSkipIds)
+
+    for _, a in ipairs(state.attached or {}) do
+        -- Worn backpack also has hotbar slot metadata; setWornItem already placed it — do not setAttachedItem again (duplicate bag / strip).
+        local skipA = false
+        if a.item then
+            if wornSkip[a.item] then skipA = true end
+            if not skipA and a.item.getID then
+                local ok, aid = pcall(function() return a.item:getID() end)
+                if ok and aid and wornSkipIds[aid] then skipA = true end
+            end
+        end
+        if not skipA then
+            trySetAttachedItem(player, a)
+            if a.item and a.item.setAttachedSlot then pcall(a.item.setAttachedSlot, a.item, a.slot or -1) end
+            if a.item and a.item.setAttachedSlotType then pcall(a.item.setAttachedSlotType, a.item, a.slotType) end
+            if a.item and a.item.setAttachedToModel then pcall(a.item.setAttachedToModel, a.item, a.model) end
+        end
+    end
+
+    if player.setPrimaryHandItem and state.primary then
+        pcall(player.setPrimaryHandItem, player, state.primary)
+    end
+    if player.setSecondaryHandItem and state.secondary then
+        pcall(player.setSecondaryHandItem, player, state.secondary)
+    end
+    if WeData.refreshPlayerHotbarUi then
+        WeData.refreshPlayerHotbarUi(player)
+    end
+end
+
+local function reapplySerializedWearOnly(player)
+    if not player or not player.setWornItem then return end
+    local inv = player.getInventory and player:getInventory()
+    if not inv or not inv.getItems then return end
+    local items = inv:getItems()
+    local worn = {}
+    for i = 0, items:size() - 1 do
+        local item = items:get(i)
+        if item then
+            local loc = item.getBodyLocation and item:getBodyLocation()
+            if loc and loc ~= "" then
+                worn[#worn + 1] = { item = item, location = loc }
+            end
+        end
+    end
+    if #worn == 0 then return end
+    sortWornEntries(worn)
+    for _, w in ipairs(worn) do
+        local bl = resolveBodyLocationForSetWornItem(w.location, w.item)
+        if bl then
+            pcall(player.setWornItem, player, bl, w.item)
+        end
+    end
+end
+
+local function finishLoadSlotWearAttach(player, index, restoredRuntimeInventory)
+    if not player then return end
+    if restoredRuntimeInventory and runtimeSlotState[index] then
+        applyWornAndAttachedFromState(player, runtimeSlotState[index])
+    else
+        reapplySerializedWearOnly(player)
+        if WeData.refreshPlayerHotbarUi then
+            WeData.refreshPlayerHotbarUi(player)
+        end
+    end
+end
+
+-- Recursive save/load for bags, holsters with contents — plain fullType rows lose nested items.
+local SERIALIZE_MAX_DEPTH = 16
+
+local function serializeItemForSlot(item, depth)
+    if not item or not inventoryItemRefAlive(item) then return nil end
+    if (depth or 0) > SERIALIZE_MAX_DEPTH then return nil end
+    local ft = nil
+    if item.getFullType then
+        local ok, x = pcall(function() return item:getFullType() end)
+        if ok and type(x) == "string" and x ~= "" then ft = x end
+    end
+    if not ft then return nil end
+    local cond = 100
+    if item.getCondition then
+        local okc, c = pcall(function() return item:getCondition() end)
+        if okc and c then cond = c end
+    end
+    local uses = 0
+    if item.getUsedDelta then
+        local oku, u = pcall(function() return item:getUsedDelta() end)
+        if oku and u then uses = u end
+    end
+    local row = { fullType = ft, condition = cond, uses = uses }
+    local inv = item.getInventory and item:getInventory()
+    if inv and inv.getItems then
+        local list = inv:getItems()
+        if list and list.size and list:size() > 0 then
+            local nested = {}
+            for i = 0, list:size() - 1 do
+                local ch = list:get(i)
+                local ser = serializeItemForSlot(ch, (depth or 0) + 1)
+                if ser then nested[#nested + 1] = ser end
+            end
+            if #nested > 0 then
+                row.contents = nested
+            end
+        end
+    end
+    return row
+end
+
+local function addItemFromSlotData(parentInv, itemData)
+    if not parentInv or not itemData or not itemData.fullType then return nil end
+    local item = instanceItem(itemData.fullType)
+    if not item then return nil end
+    if item.setCondition then item:setCondition(tonumber(itemData.condition) or 100) end
+    if item.setUsedDelta and itemData.uses ~= nil then item:setUsedDelta(itemData.uses) end
+    parentInv:AddItem(item)
+    if itemData.contents and item.getInventory then
+        local cin = item:getInventory()
+        if cin and itemData.contents and #itemData.contents > 0 then
+            for _, ch in ipairs(itemData.contents) do
+                addItemFromSlotData(cin, ch)
+            end
+        end
+    end
+    return item
+end
+
+-- Cached Java InventoryItem refs go stale after switching away from a slot (same IsoPlayer, different loadout).
+-- Never clear the live inventory unless every cached ref still responds.
+local function restoreRuntimeSlotItems(player, slotIndex)
+    if not player then return false end
+    local state = runtimeSlotState[slotIndex]
+    if not state or not state.items or #state.items == 0 then
+        return false
+    end
+
+    for _, item in ipairs(state.items) do
+        if not inventoryItemRefAlive(item) then
+            runtimeSlotState[slotIndex] = nil
+            return false
+        end
+    end
+    for _, w in ipairs(state.worn or {}) do
+        if w.item and not inventoryItemRefAlive(w.item) then
+            runtimeSlotState[slotIndex] = nil
+            return false
+        end
+    end
+    if state.primary and not inventoryItemRefAlive(state.primary) then
+        runtimeSlotState[slotIndex] = nil
+        return false
+    end
+    if state.secondary and not inventoryItemRefAlive(state.secondary) then
+        runtimeSlotState[slotIndex] = nil
+        return false
+    end
+
+    local inv = player.getInventory and player:getInventory()
+    if not inv then return false end
+
+    if player.clearWornItems then pcall(player.clearWornItems, player) end
+    if player.clearAttachedItems then pcall(player.clearAttachedItems, player) end
+    pcall(inv.clear, inv)
+
+    for _, item in ipairs(state.items) do
+        if item then
+            pcall(inv.AddItem, inv, item)
+        end
+    end
+    -- Wear/attach runs once after resetModel in finishLoadSlotWearAttach / deferred tick (avoids double-attach + bad fallbacks).
+    return true
+end
+
+-- Rebuild inventory + layered wear purely from slot.inventory (always safe across slot switches).
+local function applySerializedInventoryAndWear(player, slot)
+    if not player or not slot then return end
+    if player.clearWornItems then pcall(player.clearWornItems, player) end
+    if player.clearAttachedItems then pcall(player.clearAttachedItems, player) end
+    player:getInventory():clear()
+
+    local wornRows = {}
+    local otherRows = {}
+    for _, itemData in ipairs(slot.inventory or {}) do
+        if itemData.lastStandStr or itemData.wornLoc then
+            wornRows[#wornRows + 1] = itemData
+        else
+            otherRows[#otherRows + 1] = itemData
+        end
+    end
+    table.sort(wornRows, function(a, b)
+        return bodyLocationWearSortKey(tostring(a.wornLoc or "")) < bodyLocationWearSortKey(tostring(b.wornLoc or ""))
+    end)
+
+    for _, itemData in ipairs(wornRows) do
+        if itemData.lastStandStr then
+            local item = ItemVisual.createLastStandItem and ItemVisual.createLastStandItem(itemData.lastStandStr)
+            if item then
+                player:getInventory():AddItem(item)
+                local loc = itemData.wornLoc or (item.getBodyLocation and item:getBodyLocation())
+                local bl = resolveBodyLocationForSetWornItem(loc, item)
+                if bl then pcall(player.setWornItem, player, bl, item) end
+            end
+        elseif itemData.fullType then
+            local item = addItemFromSlotData(player:getInventory(), itemData)
+            if item and itemData.wornLoc then
+                local bl = resolveBodyLocationForSetWornItem(itemData.wornLoc, item)
+                if bl then pcall(player.setWornItem, player, bl, item) end
+            end
+        end
+    end
+
+    for _, itemData in ipairs(otherRows) do
+        if itemData.fullType then
+            local item = addItemFromSlotData(player:getInventory(), itemData)
+            if item then
+                local as = tonumber(itemData.attachedSlot)
+                local mdl = itemData.attachedToModel
+                if as and as > -1 and type(mdl) == "string" and mdl ~= "" then
+                    trySetAttachedItem(player, {
+                        item = item,
+                        model = mdl,
+                        slot = as,
+                        slotType = itemData.attachedSlotType,
+                    })
+                    if item.setAttachedSlot then pcall(item.setAttachedSlot, item, as) end
+                    if item.setAttachedSlotType and itemData.attachedSlotType then
+                        pcall(item.setAttachedSlotType, item, itemData.attachedSlotType)
+                    end
+                    if item.setAttachedToModel then pcall(item.setAttachedToModel, item, mdl) end
+                end
+            end
+        end
+    end
+end
+
+local function countExpectedWornInSlot(slot)
+    local n = 0
+    for _, e in ipairs(slot and slot.inventory or {}) do
+        if e and (e.lastStandStr or e.wornLoc) then
+            n = n + 1
+        end
+    end
+    return n
+end
+
+local function countLiveWornItems(player)
+    local n = 0
+    local w = player.getWornItems and player:getWornItems()
+    if not (w and w.size) then return 0 end
+    for i = 0, w:size() - 1 do
+        local wi = w.get and w:get(i)
+        local it = wi and wi.getItem and wi:getItem()
+        if inventoryItemRefAlive(it) then
+            n = n + 1
+        end
+    end
+    return n
 end
 
 local function hasTraitLike(slot, needle)
@@ -439,6 +975,7 @@ end
 local pendingSkillRestore = nil
 local pendingHealthRestore = nil
 local pendingSlotTeleport = nil
+local pendingTimedActionQueuePurgeTicks = 0
 local weDeathHudCleanupFrames = 0
 local weSwitchPoseCleanupFrames = 0
 -- When we trigger vanilla respawn from our death roster UI, we apply the chosen slot
@@ -464,6 +1001,21 @@ local function onTickDeferredDeathModelReset()
     print("[We] deferredDeathModelReset: applying resetModel (death-swap defer)")
     pcall(function() p:resetModelNextFrame() end)
     pcall(function() p:resetModel() end)
+    local data = WeData and WeData.getData and WeData.getData()
+    local idx = data and data._pendingLoadSlotReapplyIndex
+    if data and idx then
+        data._pendingLoadSlotReapplyIndex = nil
+        local st = runtimeSlotState[idx]
+        local hadRuntime = st and st.items and #st.items > 0
+        if hadRuntime then
+            applyWornAndAttachedFromState(p, st)
+        else
+            reapplySerializedWearOnly(p)
+            if WeData.refreshPlayerHotbarUi then
+                WeData.refreshPlayerHotbarUi(p)
+            end
+        end
+    end
 end
 -- B42: After revive-from-death on the same IsoPlayer, Events.OnPlayerDeath often does NOT fire again.
 -- Track rising edge isDead() for local player 0 so the second (and later) deaths still run the faction swap.
@@ -526,6 +1078,26 @@ local function onTickReapplyPosition()
     pendingSlotTeleport.ticks = pendingSlotTeleport.ticks - 1
     if pendingSlotTeleport.ticks > 0 then return end
     pendingSlotTeleport = nil
+end
+
+local function purgePlayerTimedActions(player)
+    if not player then return end
+    pcall(function()
+        if ISTimedActionQueue and ISTimedActionQueue.clear then
+            ISTimedActionQueue.clear(player)
+        elseif player.StopAllActionQueue then
+            player:StopAllActionQueue()
+        end
+    end)
+end
+
+local function onTickPurgeTimedActionsAfterSwitch()
+    if pendingTimedActionQueuePurgeTicks <= 0 then return end
+    local p = getSpecificPlayer(0)
+    if p then
+        purgePlayerTimedActions(p)
+    end
+    pendingTimedActionQueuePurgeTicks = pendingTimedActionQueuePurgeTicks - 1
 end
 
 -- B42: Knox progression lives in CharacterStat (see debug ISStatsAndBody), not only BodyDamage flags.
@@ -1151,6 +1723,42 @@ local function ensureModData()
     return modDataRef
 end
 
+-- Continue / reload: vanilla restores the pawn before our init; ModData slot.inventory may still
+-- list worn items (Back bag, etc.) that never got re-worn. Re-apply when live worn < snapshot.
+-- (Must live after ensureModData — onTickInitWearSync calls ensureModData().)
+local pendingInitWearSyncTicks = 0
+
+local function syncActiveSlotWearFromModIfNeeded(player, slot)
+    if not player or not slot then return end
+    if slot.x == nil then return end
+    local need = countExpectedWornInSlot(slot)
+    if need < 1 then return end
+    local live = countLiveWornItems(player)
+    if live >= need then return end
+    -- applySerializedInventoryAndWear clears the whole inventory + attachments. If we run when
+    -- only *some* worn items are missing (live < need), we wipe hotbar and non-serialized items.
+    -- Only rebuild when the engine reports zero worn rows — typical after continue/load mismatch.
+    if live > 0 then return end
+    print("[We] syncWear: applying slot snapshot (live=" .. tostring(live) .. " need=" .. tostring(need) .. ")")
+    purgePlayerTimedActions(player)
+    applySerializedInventoryAndWear(player, slot)
+    reapplySerializedWearOnly(player)
+    if WeData.refreshPlayerHotbarUi then
+        WeData.refreshPlayerHotbarUi(player)
+    end
+end
+
+local function onTickInitWearSync()
+    if pendingInitWearSyncTicks <= 0 then return end
+    pendingInitWearSyncTicks = pendingInitWearSyncTicks - 1
+    if pendingInitWearSyncTicks > 0 then return end
+    local p = getSpecificPlayer(0)
+    local data = ensureModData()
+    if not p or not data then return end
+    local slot = data.slots[data.activeSlot]
+    syncActiveSlotWearFromModIfNeeded(p, slot)
+end
+
 -- ─── Public API ────────────────────────────────────────────────────────────────
 
 function WeData.init()
@@ -1172,6 +1780,9 @@ function WeData.init()
                 data.slots[i].appearance = We.defaultSlot(i).appearance
             elseif not data.slots[i].appearance.itemVisuals then
                 data.slots[i].appearance.itemVisuals = {}
+            end
+            if not data.slots[i].appearance.clothingVisuals then
+                data.slots[i].appearance.clothingVisuals = {}
             end
         end
     end
@@ -1236,6 +1847,10 @@ function WeData.init()
                         .. " | prof=" .. tostring(slot.profession)
                         .. " | traits=" .. summarizeTraits(slot.traits or {}))
                     dumpSlot("Init SP slot" .. data.activeSlot .. " queued", slot)
+                end
+                -- Deferred: engine may not report worn items on frame 0 after load — sync bag/clothes from ModData.
+                if slot.x ~= nil and countExpectedWornInSlot(slot) >= 1 then
+                    pendingInitWearSyncTicks = math.max(pendingInitWearSyncTicks, 12)
                 end
             else
                 print("[We] Init SP: slot " .. data.activeSlot .. " is nil!")
@@ -1355,11 +1970,30 @@ function WeData.saveSlot(index)
     -- must not be overwritten from whichever descriptor is currently active during save.
     local desc = player:getDescriptor()
 
+    local prevInventory = slot.inventory or {}
+    local prevAppearance = slot.appearance or {}
+
+    local function isSerializedWornEntry(e)
+        if not e then return false end
+        return (e.wornLoc ~= nil) or (e.lastStandStr ~= nil)
+    end
+
+    local function countSerializedWorn(entries)
+        local n = 0
+        for _, e in ipairs(entries or {}) do
+            if isSerializedWornEntry(e) then n = n + 1 end
+        end
+        return n
+    end
+
     -- Position
     slot.x = player:getX()
     slot.y = player:getY()
     slot.z = player:getZ()
     slot.temperature = player.getTemperature and player:getTemperature() or slot.temperature
+    if player.getZombieKills then
+        slot.zombieKills = tonumber(player:getZombieKills()) or (slot.zombieKills or 0)
+    end
 
     -- Stats (B42 API: stats:get(CharacterStat.X))
     for _, key in ipairs(We.STATS_KEYS) do
@@ -1393,35 +2027,110 @@ function WeData.saveSlot(index)
         Bleeding = moodles and (moodles:getMoodleLevel(MoodleType.BLEEDING) or 0) or 0,
     }
 
+    captureRuntimeSlotItems(player, index)
+
     -- Inventory
     slot.inventory = {}
+    local wornEntries = {}
 
-    -- Worn clothing: use getItemVisuals + getLastStandString to preserve color tinting.
-    local ivContainer = ItemVisuals and ItemVisuals.new()
-    if ivContainer then
-        player:getItemVisuals(ivContainer)
-        for i = 0, ivContainer:size() - 1 do
-            local iv = ivContainer:get(i)
-            if iv then
-                local s = iv.getLastStandString and iv:getLastStandString()
-                if s then
-                    table.insert(slot.inventory, { lastStandStr = s })
+    -- Worn clothing: always serialize from WornItems so every entry has an explicit wornLoc.
+    -- getItemVisuals() order can drift or be empty during model churn, causing naked restore.
+    local wornItemIds = {}
+    local worn = player.getWornItems and player:getWornItems()
+    if worn and worn.size then
+        for i = 0, worn:size() - 1 do
+            local wi = worn.get and worn:get(i) or nil
+            local item = wi and wi.getItem and wi:getItem() or nil
+            if item and inventoryItemRefAlive(item) then
+                local okWid, wid = pcall(function() return item:getID() end)
+                if okWid and wid then wornItemIds[wid] = true end
+                local loc = nil
+                local wl = wi.getLocation and wi:getLocation() or nil
+                if wl and wl.getId then
+                    loc = wl:getId()
+                elseif wl then
+                    local okWl, s = pcall(function() return tostring(wl) end)
+                    loc = (okWl and type(s) == "string" and s ~= "") and s or nil
+                elseif item.getBodyLocation then
+                    local okBl, bl = pcall(function() return item:getBodyLocation() end)
+                    if okBl and bl then loc = bl end
+                end
+                loc = bodyLocationToSaveString(loc)
+                -- Do not call ItemVisual:getLastStandString here — B42 NPE + log spam. fullType+wornLoc + contents.
+                local row = serializeItemForSlot(item, 0)
+                if row then
+                    row.wornLoc = loc
+                    wornEntries[#wornEntries + 1] = row
                 end
             end
         end
     end
 
-    -- Non-worn items (food, tools, weapons, etc.)
+    local wornSerializedCount = #wornEntries
+    -- Guard against transient B42 model/save race that intermittently serializes only 0-1 worn items.
+    local prevWornCount = countSerializedWorn(prevInventory)
+    local wornLooksCorrupted = prevWornCount >= 4 and wornSerializedCount > 0 and wornSerializedCount < math.floor(prevWornCount * 0.5)
+    if (wornSerializedCount == 0 or wornLooksCorrupted) and prevWornCount > wornSerializedCount then
+        wornEntries = {}
+        for _, e in ipairs(prevInventory) do
+            if isSerializedWornEntry(e) then
+                wornEntries[#wornEntries + 1] = e
+            end
+        end
+        wornSerializedCount = #wornEntries
+        if wornSerializedCount > 0 then
+            print("[We] saveSlot(" .. tostring(index) .. "): worn fallback from previous snapshot "
+                .. "(replaced flaky worn list, count=" .. tostring(wornSerializedCount) .. ")")
+        end
+    end
+
+    for _, e in ipairs(wornEntries) do
+        table.insert(slot.inventory, e)
+    end
+
+    -- Non-worn items (food, tools, weapons, hotbar-only attach, etc.)
     local items = player:getInventory():getItems()
     for i = 0, items:size() - 1 do
         local item = items:get(i)
-        local loc = item.getBodyLocation and item:getBodyLocation()
-        if not loc then   -- skip worn clothing (already captured above)
-            table.insert(slot.inventory, {
-                fullType  = item:getFullType(),
-                condition = item.getCondition and item:getCondition() or 100,
-                uses      = item.getUsedDelta and item:getUsedDelta() or 0,
-            })
+        if item then
+            local invId = nil
+            if item.getID then
+                local okIid, iid = pcall(function() return item:getID() end)
+                if okIid and iid then invId = iid end
+            end
+            if invId and wornItemIds[invId] then
+                -- Already saved from getWornItems; skip — avoids duplicate bag when bodyLocation is nil this frame.
+            else
+            local loc = nil
+            if item.getBodyLocation then
+                local okBl, bl = pcall(function() return item:getBodyLocation() end)
+                if okBl and bl then loc = bodyLocationToSaveString(bl) end
+            end
+            if loc == "" then loc = nil end
+            -- B42: getWornItems sometimes omits the backpack; items still have bodyLocation (e.g. Back).
+            -- Old code skipped any item with loc — those rows were never saved and the bag vanished on load.
+            if loc then
+                local row = serializeItemForSlot(item, 0)
+                if row then
+                    row.wornLoc = loc
+                    table.insert(slot.inventory, row)
+                    if invId then wornItemIds[invId] = true end
+                end
+            else
+                local row = serializeItemForSlot(item, 0)
+                if row then
+                    local as = item.getAttachedSlot and item:getAttachedSlot() or -1
+                    if as and as > -1 then
+                        row.attachedSlot = as
+                        local m = item.getAttachedToModel and item:getAttachedToModel()
+                        if m and tostring(m) ~= "" then row.attachedToModel = tostring(m) end
+                        local st = item.getAttachedSlotType and item:getAttachedSlotType()
+                        if st then row.attachedSlotType = tostring(st) end
+                    end
+                    table.insert(slot.inventory, row)
+                end
+            end
+            end
         end
     end
 
@@ -1537,6 +2246,10 @@ function WeData.saveSlot(index)
     if desc then
         local prof = desc:getCharacterProfession()
         slot.profession = prof and tostring(prof) or nil
+        if desc.getVoicePrefix then
+            local vp = desc:getVoicePrefix()
+            slot.voicePrefix = vp and tostring(vp) or slot.voicePrefix
+        end
     end
 
     -- Traits: slot.traits is the authoritative source.
@@ -1547,6 +2260,17 @@ function WeData.saveSlot(index)
 
     -- Appearance (for NPC dressing)
     slot.appearance = WeNPC.captureAppearance(player)
+    local appClothes = #(slot.appearance and slot.appearance.clothingVisuals or {})
+    local prevAppClothes = #(prevAppearance and prevAppearance.clothingVisuals or {})
+    if prevAppClothes >= 4 and appClothes > 0 and appClothes < math.floor(prevAppClothes * 0.5) then
+        slot.appearance.clothingVisuals = prevAppearance.clothingVisuals
+        print("[We] saveSlot(" .. tostring(index) .. "): appearance fallback clothes "
+            .. tostring(appClothes) .. " -> " .. tostring(prevAppClothes))
+    end
+    if appClothes == 0 and prevAppClothes > 0 then
+        slot.appearance.clothingVisuals = prevAppearance.clothingVisuals
+        print("[We] saveSlot(" .. tostring(index) .. "): appearance fallback clothes 0 -> " .. tostring(prevAppClothes))
+    end
 
     dumpSlot("saveSlot(" .. index .. ")", slot)
 end
@@ -1556,6 +2280,9 @@ end
 function WeData.loadSlot(index)
     local player = getPlayer()
     if not player then return end
+    -- Vanilla wear actions can survive slot switch and later crash in ISWearClothing on stale item refs.
+    purgePlayerTimedActions(player)
+    pendingTimedActionQueuePurgeTicks = math.max(pendingTimedActionQueuePurgeTicks or 0, 240)
 
     local slot = ensureModData().slots[index]
     if not slot or slot.x == nil then
@@ -1578,6 +2305,9 @@ function WeData.loadSlot(index)
             desc:setForename(fore)
             desc:setSurname(sur or "")
         end
+    end
+    if desc and slot.voicePrefix and desc.setVoicePrefix then
+        pcall(desc.setVoicePrefix, desc, tostring(slot.voicePrefix))
     end
 
     local stats = player:getStats()
@@ -1602,25 +2332,10 @@ function WeData.loadSlot(index)
     player:setZ(slot.z)
     pendingSlotTeleport = { x = slot.x, y = slot.y, z = slot.z, ticks = 45 }
 
-    -- Inventory + clothing
-    if player.clearWornItems then player:clearWornItems() end
-    player:getInventory():clear()
-    for _, itemData in ipairs(slot.inventory) do
-        if itemData.lastStandStr then
-            local item = ItemVisual.createLastStandItem and ItemVisual.createLastStandItem(itemData.lastStandStr)
-            if item then
-                player:getInventory():AddItem(item)
-                local loc = item.getBodyLocation and item:getBodyLocation()
-                if loc then pcall(player.setWornItem, player, loc, item) end
-            end
-        else
-            local item = instanceItem(itemData.fullType)
-            if item then
-                if item.setCondition then item:setCondition(itemData.condition) end
-                if item.setUsedDelta then item:setUsedDelta(itemData.uses) end
-                player:getInventory():AddItem(item)
-            end
-        end
+    -- Inventory + clothing (runtime refs often die after playing another slot — fall back to serialized snapshot).
+    local restoredRuntimeInventory = restoreRuntimeSlotItems(player, index)
+    if not restoredRuntimeInventory then
+        applySerializedInventoryAndWear(player, slot)
     end
 
     -- Body damage: always restore to full health first (prevents wound transfer),
@@ -1747,6 +2462,9 @@ function WeData.loadSlot(index)
     if slot.temperature ~= nil and player.setTemperature then
         player:setTemperature(slot.temperature)
     end
+    if slot.zombieKills ~= nil and player.setZombieKills then
+        pcall(player.setZombieKills, player, tonumber(slot.zombieKills) or 0)
+    end
     local moodlesNow = player:getMoodles()
     slot.moodles = slot.moodles or {}
     if moodlesNow then
@@ -1768,6 +2486,21 @@ function WeData.loadSlot(index)
 
     -- Traits/model pipeline can run after infection clear; zero Knox again so moodle/model stay correct.
     clearB42KnoxVisualState(player, deferDeathModel)
+    -- resetModel() above strips worn items and hotbar attachments; put them back after all model passes.
+    local dataMd = ensureModData()
+    if deferDeathModel then
+        dataMd._pendingLoadSlotReapplyIndex = index
+    else
+        finishLoadSlotWearAttach(player, index, restoredRuntimeInventory)
+        -- Model/attach passes can leave pawn dressed in data but visually naked — rebuild from slot snapshot.
+        local needWorn = countExpectedWornInSlot(slot)
+        if needWorn >= 1 and countLiveWornItems(player) == 0 then
+            print("[We] loadSlot(" .. tostring(index) .. "): recover outfit from snapshot (live worn=0, need=" .. tostring(needWorn) .. ")")
+            runtimeSlotState[index] = nil
+            applySerializedInventoryAndWear(player, slot)
+            finishLoadSlotWearAttach(player, index, false)
+        end
+    end
     -- Post-death switch: first revive already restored UI; loadSlot can leave HUD/input wrong again.
     restorePlayerControlAfterRevive(player, ensureModData()._deathSelectionMode == true)
 
@@ -1784,6 +2517,7 @@ function WeData.killSlot(index)
     -- A dead slot must be removed from rotation entirely.
     data.slots[index] = We.defaultSlot(index)
     WeNPC.Cache[index] = nil
+    runtimeSlotState[index] = nil
 
     print("[We] Slot " .. index .. " killed (NPC died).")
 end
@@ -1858,6 +2592,11 @@ function WeData._switchTo(index, ignoreHomeCheck)
     if deathMode and WeData.reviveRuntimePlayerForSwitch then
         WeData.reviveRuntimePlayerForSwitch(100, true)
     end
+
+    -- Clear ISWearClothing / ISAttachItemHotbar before saveSlot+capture — stale actions NPE in vanilla perform + hotbar refresh.
+    purgePlayerTimedActions(player)
+    pendingTimedActionQueuePurgeTicks = math.max(pendingTimedActionQueuePurgeTicks or 0, 180)
+    clearHandsIntoInventory(player)
 
     local prevSlot = data.slots[prev]
     local prevAlive = prevSlot and (tonumber(prevSlot.health) or 100) > 0
@@ -2256,6 +2995,8 @@ Events.OnTick.Add(onTickWeDeathHudCleanup)
 Events.OnTick.Add(onTickWeSwitchPoseCleanup)
 Events.OnTick.Add(onTickPostDeathZombieClear)
 Events.OnTick.Add(onTickPostDeathMoveUnlock)
+Events.OnTick.Add(onTickPurgeTimedActionsAfterSwitch)
+Events.OnTick.Add(onTickInitWearSync)
 
 local function tryBeginFactionDeathSwap(player, sourceTag)
     if not player then

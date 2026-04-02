@@ -1,5 +1,9 @@
 -- We: Client entry point — initialisation and NPC startup.
 
+require "We_FixAttachItemHotbar"
+require "We_FixISHotbar"
+require "We_FixISWearClothing"
+
 local _initDone = false
 local _initTries = 0
 local MAX_INIT_TRIES = 300 -- ~5s at 60 FPS

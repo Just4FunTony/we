@@ -31,6 +31,8 @@ function We.defaultSlot(index)
             hairColor   = nil,  -- {r, g, b}
             beardStyle  = nil,
             beardColor  = nil,  -- {r, g, b}
+            humanVisualLS = nil,
+            clothingVisuals = {}, -- per-piece Last Stand strings (blood/dirt/tint)
             itemVisuals = {},   -- ordered list of itemFullType strings (rendered layer order)
         },
 
