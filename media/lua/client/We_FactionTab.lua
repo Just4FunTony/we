@@ -119,7 +119,8 @@ end
 
 function WeRosterPanel:initialise()
     ISPanel.initialise(self)
-    self.moveWithMouse = true
+    -- Keep roster content panel fixed inside tab container.
+    self.moveWithMouse = false
 
     -- Fixed status label at top
     self.baseStatusLabel = ISLabel:new(PADDING, 6, 14, "", 1, 1, 1, 1, UIFont.Small, true)
@@ -315,9 +316,11 @@ function WeRosterPanel:initialise()
         end
 
         if d.isAddRow then
+            self.rosterPanel._forceNoPortraitSelection = true
             self.rosterPanel.selectedPortraitSlot = nil
             self.rosterPanel:updatePortraitForSlot(nil)
         else
+            self.rosterPanel._forceNoPortraitSelection = false
             self.rosterPanel.selectedPortraitSlot = d.slotIndex
             self.rosterPanel:updatePortraitForSlot(d.slotIndex)
         end
@@ -564,13 +567,7 @@ function WeRosterPanel:updatePortraitForSlot(slotIndex)
     local slot = WeData.getSlot(slotIndex)
     if not slot then return end
 
-    -- Java can NPE in UI3DModel.render if we swap survivor while the preview is visible; only reset when selection changes.
-    local selChanged = (slotIndex ~= self._lastPortraitSlot)
     self._lastPortraitSlot = slotIndex
-    if selChanged and self.portraitPanel and not self._portraitDisabled then
-        self.portraitPanel:setVisible(false)
-        self._portraitShowIn = 8
-    end
 
     local active = WeData.getActiveSlot()
     local player = getSpecificPlayer(0)
@@ -654,31 +651,37 @@ function WeRosterPanel:updatePortraitForSlot(slotIndex)
     self.moodlesLabel:setY(self.perksLabel.y + 20 + traitRows * 18 + 4)
     self.moodlesLabel.name = "Moodles"
     self:addMoodleIcons(slot, slotIndex)
+    if self.portraitPanel and not self._portraitDisabled then
+        self.portraitPanel:setVisible(true)
+    end
 end
 
 function WeRosterPanel:refreshRows()
     local data   = WeData.getData()
     local atBase = WeData.isAtHomeBase()
     local deathMode = data and data._deathSelectionMode == true
-
-    -- In post-death mode prioritize reliable slot selection UI over portrait rendering.
-    if self.slotList then
-        if deathMode then
-            self.slotList:setWidth(self.width - PADDING * 2)
-            if self.portraitPanel then self.portraitPanel:setVisible(false) end
-            self.profLabel:setVisible(false)
-            self.perksLabel:setVisible(false)
-            self.moodlesLabel:setVisible(false)
-            self:clearProfessionIcon()
-            self:clearTraitIcons()
-            self:clearMoodleIcons()
-        else
-            self.slotList:setWidth(self.width - PORTRAIT_W - PADDING - 8)
-            if self.portraitPanel and not self._portraitDisabled then self.portraitPanel:setVisible(true) end
-            self.profLabel:setVisible(true)
-            self.perksLabel:setVisible(true)
-            self.moodlesLabel:setVisible(true)
+    if WeTabPanel then
+        WeTabPanel.moveWithMouse = not deathMode
+        if WeTabPanel._closeBtn then
+            WeTabPanel._closeBtn:setVisible(not deathMode)
         end
+        if deathMode then
+            local sw = getCore():getScreenWidth()
+            local sh = getCore():getScreenHeight()
+            local px = math.floor(sw / 2 - WeTabPanel.width / 2)
+            local py = math.floor(sh / 2 - WeTabPanel.height / 2)
+            WeTabPanel:setX(px)
+            WeTabPanel:setY(py)
+        end
+    end
+
+    -- Keep portrait/traits/moodles behavior identical for alive and post-death modes.
+    if self.slotList then
+        self.slotList:setWidth(self.width - PORTRAIT_W - PADDING - 8)
+        if self.portraitPanel and not self._portraitDisabled then self.portraitPanel:setVisible(true) end
+        self.profLabel:setVisible(true)
+        self.perksLabel:setVisible(true)
+        self.moodlesLabel:setVisible(true)
     end
 
     -- Status label
@@ -710,7 +713,10 @@ function WeRosterPanel:refreshRows()
     local active = WeData.getActiveSlot()
     local selected = self.selectedPortraitSlot
     local selectedValid = selected and slotHasCharacterData(WeData.getSlot(selected))
-    if selectedValid then
+    if self._forceNoPortraitSelection then
+        self.selectedPortraitSlot = nil
+        self:updatePortraitForSlot(nil)
+    elseif selectedValid then
         self:updatePortraitForSlot(selected)
     elseif active and slotHasCharacterData(WeData.getSlot(active)) then
         self.selectedPortraitSlot = active
@@ -720,23 +726,25 @@ function WeRosterPanel:refreshRows()
         self:updatePortraitForSlot(nil)
     end
 
-    -- Remove button: SP only, when home is set
+    -- Remove button: SP only, when home is set, player alive and currently at safehouse.
     local isMP = getWorld and getWorld():getGameMode() == "Multiplayer"
-    self.removeHomeBtn:setVisible(not isMP and data.homeX ~= nil)
+    local p = getSpecificPlayer(0)
+    local alive = p and (not (p.isDead and p:isDead()))
+    self.removeHomeBtn:setVisible(not isMP and data.homeX ~= nil and atBase and alive == true)
 end
 
 function WeRosterPanel:update()
-    if self._portraitShowIn then
-        self._portraitShowIn = self._portraitShowIn - 1
-        if self._portraitShowIn <= 0 then
-            self._portraitShowIn = nil
-            if self.portraitPanel and not self._portraitDisabled then
-                local data = WeData.getData()
-                local deathMode = data and data._deathSelectionMode == true
-                if not deathMode then
-                    self.portraitPanel:setVisible(true)
-                end
-            end
+    local data = WeData and WeData.getData and WeData.getData()
+    local deathMode = data and data._deathSelectionMode == true
+    if WeTabPanel and deathMode then
+        WeTabPanel.moveWithMouse = false
+        local sw = getCore():getScreenWidth()
+        local sh = getCore():getScreenHeight()
+        local px = math.floor(sw / 2 - WeTabPanel.width / 2)
+        local py = math.floor(sh / 2 - WeTabPanel.height / 2)
+        if WeTabPanel:getX() ~= px or WeTabPanel:getY() ~= py then
+            WeTabPanel:setX(px)
+            WeTabPanel:setY(py)
         end
     end
 
@@ -744,6 +752,10 @@ function WeRosterPanel:update()
     self._portraitTick = (self._portraitTick or 0) + 1
     if self._portraitTick >= 20 then
         self._portraitTick = 0
+        if self._forceNoPortraitSelection then
+            self:updatePortraitForSlot(nil)
+            return
+        end
         local selected = self.selectedPortraitSlot
         local active = WeData.getActiveSlot()
         if selected and selected == active and WeData.getSlot(selected) then
@@ -764,11 +776,14 @@ function WeRosterPanel:render()
 end
 
 function WeRosterPanel:onRemoveHome()
+    local p = getSpecificPlayer(0)
+    if not p or (p.isDead and p:isDead()) or not WeData.isAtHomeBase() then
+        return
+    end
     WeData.clearHome()
     self:refreshRows()
-    local player = getSpecificPlayer(0)
-    if player then
-        HaloTextHelper.addText(player, We.getText("UI_We_HomeRemoved"))
+    if p then
+        HaloTextHelper.addText(p, We.getText("UI_We_HomeRemoved"))
     end
 end
 
@@ -789,6 +804,11 @@ function WeRosterPanel:onSwitchClick(slotIndex)
     local ok = WeData.switchTo(slotIndex)
     print("[We][DbgSwitch] onSwitchClick result=" .. tostring(ok)
         .. " activeAfter=" .. tostring(WeData.getActiveSlot()))
+    if ok then
+        self._forceNoPortraitSelection = false
+        self.selectedPortraitSlot = WeData.getActiveSlot()
+        self:updatePortraitForSlot(self.selectedPortraitSlot)
+    end
     self:refreshRows()
     if ok and WeTabPanel then
         WeTabPanel:setVisible(false)
@@ -811,6 +831,11 @@ function WeRosterPanel:onAddClick()
             end
             print("[We][DbgSwitch] onAddClick result=" .. tostring(ok)
                 .. " activeAfter=" .. tostring(WeData.getActiveSlot()))
+            if ok then
+                self._forceNoPortraitSelection = false
+                self.selectedPortraitSlot = WeData.getActiveSlot()
+                self:updatePortraitForSlot(self.selectedPortraitSlot)
+            end
             self:refreshRows()
             if ok and WeTabPanel then
                 WeTabPanel:setVisible(false)
@@ -821,6 +846,8 @@ function WeRosterPanel:onAddClick()
 end
 
 function WeRosterPanel:onKickClick(slotIndex)
+    local actor = getSpecificPlayer(0)
+    if not actor or (actor.isDead and actor:isDead()) then return end
     local slot = WeData.getSlot(slotIndex)
     if not slot then return end
     if slotIndex == WeData.getActiveSlot() then return end
@@ -872,11 +899,31 @@ function openWeTabPanel(userPanel, forceOpen)
         WeData.restoreGameHudVisibility()
     end
     if not forceOpen and WeTabPanel and WeTabPanel:isVisible() then
+        local dataNow = WeData and WeData.getData and WeData.getData()
+        if dataNow and dataNow._deathSelectionMode == true then
+            return
+        end
         WeTabPanel:setVisible(false)
         return
     end
 
     if forceOpen and WeTabPanel then
+        local dataNow = WeData and WeData.getData and WeData.getData()
+        local deathModeNow = dataNow and dataNow._deathSelectionMode == true
+        local sw = getCore():getScreenWidth()
+        local sh = getCore():getScreenHeight()
+        local px = math.floor(sw / 2 - WeTabPanel.width / 2)
+        local py = math.floor(sh / 2 - WeTabPanel.height / 2)
+        WeTabPanel:setX(px)
+        WeTabPanel:setY(py)
+        WeTabPanel.moveWithMouse = not deathModeNow
+        if WeTabPanel._closeBtn then
+            WeTabPanel._closeBtn:setVisible(not deathModeNow)
+        end
+        -- If already open, re-open to force a clean refresh of row content/state.
+        if WeTabPanel:isVisible() then
+            WeTabPanel:setVisible(false)
+        end
         WeTabPanel:setVisible(true)
         if WeTabPanel.weRosterPanel and WeTabPanel.weRosterPanel.refreshRows then
             WeTabPanel.weRosterPanel:refreshRows()
@@ -898,18 +945,31 @@ function openWeTabPanel(userPanel, forceOpen)
     WeTabPanel.moveWithMouse    = true
     WeTabPanel.allowDraggingTabs = false
     WeTabPanel.onKeyPressed = function(self, key)
-        if key == Keyboard.KEY_ESCAPE then self:setVisible(false) end
+        if key == Keyboard.KEY_ESCAPE then
+            local dataNow = WeData and WeData.getData and WeData.getData()
+            if dataNow and dataNow._deathSelectionMode == true then
+                return
+            end
+            self:setVisible(false)
+        end
     end
     WeTabPanel:initialise()
     WeTabPanel:addToUIManager()
 
     -- Close button in the tab bar
     local closeBtn = ISButton:new(PANEL_W - 22, 2, 18, TAB_H - 4, "x", WeTabPanel,
-        function(panel) panel:setVisible(false) end)
+        function(panel)
+            local dataNow = WeData and WeData.getData and WeData.getData()
+            if dataNow and dataNow._deathSelectionMode == true then
+                return
+            end
+            panel:setVisible(false)
+        end)
     closeBtn.backgroundColor          = {r=0.5, g=0.1, b=0.1, a=1}
     closeBtn.backgroundColorMouseOver = {r=0.8, g=0.2, b=0.2, a=1}
     closeBtn:initialise()
     WeTabPanel:addChild(closeBtn)
+    WeTabPanel._closeBtn = closeBtn
 
     -- ── Faction tab (MP only) ────────────────────────────────────────────────
     if not isSP then

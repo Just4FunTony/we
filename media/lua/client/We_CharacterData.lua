@@ -621,6 +621,22 @@ function WeData.recreatePlayerHudAfterDeathRevive(player)
     end
 end
 
+-- Switching survivors can leave quick-slot UI stale (old attached items/icons).
+-- Force hotbar to rebuild its slot list and attached icon mapping.
+function WeData.refreshPlayerHotbarUi(player)
+    if not player then return end
+    local id = 0
+    if player.getPlayerNum then
+        local ok, n = pcall(player.getPlayerNum, player)
+        if ok and n ~= nil then id = n end
+    end
+    local hb = getPlayerHotbar and getPlayerHotbar(id)
+    if not hb then return end
+    pcall(function() hb.needsRefresh = true end)
+    pcall(function() hb:refresh() end)
+    pcall(function() hb:reloadIcons() end)
+end
+
 -- Important: global setGameSpeed(1) in B42 SP is immediately followed by setGameSpeed(3) in the engine (ExitDebug),
 -- which breaks real-time input feel. Use GameTime + UI speed control only — no global setGameSpeed here.
 function WeData.normalizeGameSpeedToRealtime()
@@ -1978,6 +1994,9 @@ function WeData._switchTo(index, ignoreHomeCheck)
         .. " playerHealthNow=" .. tostring(readPlayerHealth100(player)))
     if deathMode and player then
         logMovementSnapshot(player, "switchTo_death_done")
+    end
+    if player and WeData.refreshPlayerHotbarUi then
+        WeData.refreshPlayerHotbarUi(player)
     end
     -- Pose/input can stick after loadSlot or death revive — same cleanup as non-death switches.
     if player then
