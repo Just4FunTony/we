@@ -1,9 +1,55 @@
 -- We: Server-side command handler.
 -- Spawns and despawns NPC zombies for inactive character slots.
 
+-- Hotbar/back/belt attach rows (mirrors We_NPC.applyHotbarAttachmentsFromRows on client).
+local function applyHotbarAttachmentsFromRows(zombie, rows)
+    if not zombie or not rows or #rows == 0 then return end
+    local inv = zombie.getInventory and zombie:getInventory()
+    if not inv or not inv.getItems then return end
+    for _, row in ipairs(rows) do
+        local mdl = row.attachedToModel
+        local as = tonumber(row.attachedSlot)
+        if not row.fullType or not mdl or mdl == "" or not as or as <= -1 then
+            -- skip
+        else
+            local item = nil
+            local list = inv:getItems()
+            for ii = 0, list:size() - 1 do
+                local it = list:get(ii)
+                if it and it.getFullType and it:getFullType() == row.fullType then
+                    item = it
+                    break
+                end
+            end
+            if not item then
+                item = instanceItem(row.fullType)
+                if item then
+                    if item.setCondition and row.condition ~= nil then
+                        pcall(item.setCondition, item, tonumber(row.condition) or 100)
+                    end
+                    if item.setUsedDelta and row.uses ~= nil then
+                        pcall(item.setUsedDelta, item, row.uses)
+                    end
+                    pcall(inv.AddItem, inv, item)
+                end
+            end
+            if item and zombie.setAttachedItem then
+                pcall(function()
+                    zombie:setAttachedItem(mdl, item)
+                end)
+                if item.setAttachedSlot then pcall(item.setAttachedSlot, item, as) end
+                if item.setAttachedSlotType and row.attachedSlotType then
+                    pcall(item.setAttachedSlotType, item, row.attachedSlotType)
+                end
+                if item.setAttachedToModel then pcall(item.setAttachedToModel, item, mdl) end
+            end
+        end
+    end
+end
+
 -- Apply appearance to a zombie on the server side.
 -- Must be duplicated here because We_NPC.lua is client-only.
-local function applyAppearance(zombie, app)
+local function applyAppearance(zombie, app, brain)
     if not app then return end
     local vis = zombie:getHumanVisual()
     if not vis then return end
@@ -62,6 +108,9 @@ local function applyAppearance(zombie, app)
 
     zombie:resetModelNextFrame()
     zombie:resetModel()
+    if brain and brain.hotbarAttach and #brain.hotbarAttach > 0 then
+        applyHotbarAttachmentsFromRows(zombie, brain.hotbarAttach)
+    end
 end
 
 local function summarizeTraits(traits)
@@ -165,7 +214,7 @@ local function onClientCommand(module, command, player, args)
                             z:setVariable("WeResident", true)
                             z:setTarget(nil)
                             if z.setTargetSeenTime then z:setTargetSeenTime(0) end
-                            applyAppearance(z, brain.appearance)
+                            applyAppearance(z, brain.appearance, brain)
                             existingResident.brain = brain
                         end
                         updatedLoaded = true
@@ -209,7 +258,7 @@ local function onClientCommand(module, command, player, args)
                         z:setVariable("WeResident", true)
                         z:setTarget(nil)
                         if z.setTargetSeenTime then z:setTargetSeenTime(0) end
-                        applyAppearance(z, brain.appearance)
+                        applyAppearance(z, brain.appearance, brain)
                     end
                     weMD.residents[tostring(slotIndex)] = {slotIndex = slotIndex, brain = brain}
                     ModData.transmit("We")
@@ -281,7 +330,7 @@ local function onClientCommand(module, command, player, args)
         zombie:getModData().weBrain = brain
 
         -- Apply appearance immediately on the server so the zombie is never naked
-        applyAppearance(zombie, brain and brain.appearance)
+        applyAppearance(zombie, brain and brain.appearance, brain)
 
         -- Human animation and sound suppression (from Bandits mod pattern)
         if zombie.setWalkType then zombie:setWalkType("Walk") end

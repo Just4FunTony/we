@@ -610,24 +610,96 @@ function WeRosterPanel:updatePortraitForSlot(slotIndex)
             end
         end
         -- Restore saved worn clothes from slot inventory so portrait uses actual outfit.
+        -- Slot saves use fullType+wornLoc (not only lastStandStr); without this the inactive portrait is naked.
         if desc.getWornItems and desc.setWornItem and slot.inventory then
+            local function portraitWearSortKey(locStr)
+                local l = tostring(locStr or "")
+                if l == "Back" then return 950 end
+                if l:find("Holster", 1, true) then return 880 end
+                if l == "Belt" or l:find("Belt", 1, true) then return 860 end
+                if l:find("Jacket", 1, true) then return 780 end
+                if l:find("Sweater", 1, true) then return 760 end
+                if l == "Torso" or l == "ShortSleeveShirt" or l == "Tshirt" or l == "TankTop" then return 720 end
+                if l:find("Dress", 1, true) or l:find("FullSuit", 1, true) then return 710 end
+                if l == "Pants" or l == "Skirt" then return 400 end
+                if l == "Shoes" then return 350 end
+                if l == "Socks" then return 320 end
+                if l:find("Underwear", 1, true) then return 280 end
+                return 500
+            end
+
+            local function inferSortLocStr(itemData)
+                if itemData.wornLoc and tostring(itemData.wornLoc) ~= "" then
+                    return tostring(itemData.wornLoc)
+                end
+                if itemData.lastStandStr and ItemVisual.createLastStandItem then
+                    local it = ItemVisual.createLastStandItem(itemData.lastStandStr)
+                    if it and it.getBodyLocation then
+                        local ok, loc = pcall(function() return it:getBodyLocation() end)
+                        if ok and loc then return tostring(loc) end
+                    end
+                end
+                return ""
+            end
+
+            local function resolveDescBodyLoc(rawLoc, item)
+                if rawLoc ~= nil and type(rawLoc) ~= "string" then
+                    return rawLoc
+                end
+                local s = rawLoc
+                if (s == nil or s == "") and item and item.getBodyLocation then
+                    local ok, bl = pcall(function() return item:getBodyLocation() end)
+                    if ok and bl then
+                        s = bl
+                    end
+                end
+                if s == nil or s == "" then return nil end
+                if type(s) ~= "string" then
+                    return s
+                end
+                local ok, enum = pcall(function()
+                    return ItemBodyLocation.get(ResourceLocation.of(s))
+                end)
+                if ok and enum then return enum end
+                return s
+            end
+
             local worn = desc:getWornItems()
             if worn and worn.clear then worn:clear() end
+
+            local rows = {}
             for _, itemData in ipairs(slot.inventory) do
-                if itemData.lastStandStr then
-                    local item = ItemVisual.createLastStandItem and ItemVisual.createLastStandItem(itemData.lastStandStr)
+                local wl = itemData.wornLoc
+                local hasWl = wl ~= nil and tostring(wl) ~= ""
+                if itemData.lastStandStr or (itemData.fullType and hasWl) then
+                    rows[#rows + 1] = itemData
+                end
+            end
+            table.sort(rows, function(a, b)
+                return portraitWearSortKey(inferSortLocStr(a)) < portraitWearSortKey(inferSortLocStr(b))
+            end)
+
+            for _, itemData in ipairs(rows) do
+                if itemData.lastStandStr and ItemVisual.createLastStandItem then
+                    local item = ItemVisual.createLastStandItem(itemData.lastStandStr)
                     if item then
                         local loc = item.getBodyLocation and item:getBodyLocation()
                         if loc and loc ~= "" then
-                            local bodyLoc = nil
-                            if type(loc) == "string" then
-                                bodyLoc = ItemBodyLocation.get(ResourceLocation.of(loc))
-                            else
-                                bodyLoc = loc
-                            end
+                            local bodyLoc = resolveDescBodyLoc(loc, item)
                             if bodyLoc then
-                                desc:setWornItem(bodyLoc, item)
+                                pcall(function() desc:setWornItem(bodyLoc, item) end)
                             end
+                        end
+                    end
+                elseif itemData.fullType and itemData.wornLoc and tostring(itemData.wornLoc) ~= "" then
+                    local item = instanceItem(itemData.fullType)
+                    if item then
+                        if item.setCondition and itemData.condition ~= nil then
+                            pcall(item.setCondition, item, tonumber(itemData.condition) or 100)
+                        end
+                        local bodyLoc = resolveDescBodyLoc(itemData.wornLoc, item)
+                        if bodyLoc then
+                            pcall(function() desc:setWornItem(bodyLoc, item) end)
                         end
                     end
                 end
@@ -641,8 +713,18 @@ function WeRosterPanel:updatePortraitForSlot(slotIndex)
             print("[We] portrait disabled: setSurvivorDesc failed")
             return
         end
-        -- Only fallback when no saved clothing exists.
-        if self.portraitPanel.setOutfitName and (not slot.inventory or #slot.inventory == 0) then
+        -- Only fallback when snapshot has no wearable rows (fullType+wornLoc or lastStandStr).
+        local hasWornForPortrait = false
+        if slot.inventory then
+            for _, invRow in ipairs(slot.inventory) do
+                local wl = invRow.wornLoc
+                if invRow.lastStandStr or (invRow.fullType and wl ~= nil and tostring(wl) ~= "") then
+                    hasWornForPortrait = true
+                    break
+                end
+            end
+        end
+        if self.portraitPanel.setOutfitName and not hasWornForPortrait then
             self.portraitPanel:setOutfitName("Foreman", false, false)
         end
     end

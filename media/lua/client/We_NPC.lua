@@ -215,6 +215,71 @@ local function clearZombieAttachments(zombie)
     end
 end
 
+-- Serialized hotbar/back/belt rows (for resident zombie — weapons on body, not worn clothes).
+function WeNPC.collectHotbarAttachRows(inventory)
+    local out = {}
+    for _, row in ipairs(inventory or {}) do
+        local as = tonumber(row.attachedSlot)
+        if row.fullType and as and as > -1 and type(row.attachedToModel) == "string" and row.attachedToModel ~= "" then
+            out[#out + 1] = {
+                fullType = row.fullType,
+                condition = row.condition,
+                uses = row.uses,
+                attachedSlot = as,
+                attachedToModel = row.attachedToModel,
+                attachedSlotType = row.attachedSlotType,
+            }
+        end
+    end
+    return out
+end
+
+-- Re-attach after clearZombieAttachments (every tick) — find existing inv item or instance once.
+function WeNPC.applyHotbarAttachmentsFromRows(char, rows)
+    if not char or not rows or #rows == 0 then return end
+    local inv = char.getInventory and char:getInventory()
+    if not inv or not inv.getItems then return end
+    for _, row in ipairs(rows) do
+        local mdl = row.attachedToModel
+        local as = tonumber(row.attachedSlot)
+        if not row.fullType or not mdl or mdl == "" or not as or as <= -1 then
+            -- skip
+        else
+            local item = nil
+            local list = inv:getItems()
+            for ii = 0, list:size() - 1 do
+                local it = list:get(ii)
+                if it and it.getFullType and it:getFullType() == row.fullType then
+                    item = it
+                    break
+                end
+            end
+            if not item then
+                item = instanceItem(row.fullType)
+                if item then
+                    if item.setCondition and row.condition ~= nil then
+                        pcall(item.setCondition, item, tonumber(row.condition) or 100)
+                    end
+                    if item.setUsedDelta and row.uses ~= nil then
+                        pcall(item.setUsedDelta, item, row.uses)
+                    end
+                    pcall(inv.AddItem, inv, item)
+                end
+            end
+            if item and char.setAttachedItem then
+                pcall(function()
+                    char:setAttachedItem(mdl, item)
+                end)
+                if item.setAttachedSlot then pcall(item.setAttachedSlot, item, as) end
+                if item.setAttachedSlotType and row.attachedSlotType then
+                    pcall(item.setAttachedSlotType, item, row.attachedSlotType)
+                end
+                if item.setAttachedToModel then pcall(item.setAttachedToModel, item, mdl) end
+            end
+        end
+    end
+end
+
 -- ─── Brain builder ─────────────────────────────────────────────────────────────
 
 function WeNPC.buildBrain(slot, slotIndex)
@@ -228,6 +293,7 @@ function WeNPC.buildBrain(slot, slotIndex)
             end
         end
     end
+    local hotbarAttach = WeNPC.collectHotbarAttachRows(slot and slot.inventory)
     -- NPC anchors to the character's last saved position so they stay where you left them
     return {
         slotIndex  = slotIndex,
@@ -237,6 +303,7 @@ function WeNPC.buildBrain(slot, slotIndex)
         homeZ      = slot.z or 0,
         appearance = app,
         female     = (slot.appearance and slot.appearance.female) or false,
+        hotbarAttach = hotbarAttach,
     }
 end
 
@@ -262,6 +329,7 @@ function WeNPC.spawnForSlot(slotIndex)
             npc:getModData().weBrain = brain
             npc:setVariable("WeResident", true)
             WeNPC.applyVisuals(npc, brain.appearance)
+            WeNPC.applyHotbarAttachmentsFromRows(npc, WeNPC.collectHotbarAttachRows(slot.inventory))
             WeNPC.Cache[slotIndex] = npc
             slot.npcId = slotIndex
             print("[We] Spawned NPC player for slot " .. slotIndex)
@@ -837,6 +905,15 @@ local function onZombieUpdate(zombie)
         brain.visualsApplied = true
     end
     clearZombieAttachments(zombie)
+    -- Restore hotbar/back/belt weapons (clearZombieAttachments runs every tick and strips engine defaults).
+    do
+        local dataHB = getDataSafe("onZombieUpdate.hotbar")
+        local slotHB = dataHB and dataHB.slots and brain.slotIndex and dataHB.slots[brain.slotIndex]
+        local rows = (slotHB and WeNPC.collectHotbarAttachRows(slotHB.inventory)) or brain.hotbarAttach
+        if rows and #rows > 0 then
+            WeNPC.applyHotbarAttachmentsFromRows(zombie, rows)
+        end
+    end
 
     -- Keep zombie on floor and avoid random vertical glitches.
     if brain.homeZ and math.abs((zombie:getZ() or 0) - brain.homeZ) > 0.01 then
