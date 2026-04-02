@@ -3,6 +3,10 @@
 -- contains both the standard Faction panel and our Characters roster.
 require "ISUI/ISUI3DModel"
 require "XpSystem/ISUI/ISCharacterScreen"
+pcall(require, "We_NPC")
+
+-- Inactive portrait: prefer setCharacter(WeNPC.Cache[slot]) — real world resident has full visuals. Else setSurvivorDesc(desc).
+-- (Preview-only IsoSurvivor + setCharacter tracked the local player mesh in B42.)
 
 local PANEL_W  = 520
 local VIEW_H   = 450
@@ -32,6 +36,24 @@ local function moodleLevelFrom01(v)
     return 4
 end
 
+--- World resident for this slot (NPC stand-in). Full visuals + inventory; UI3DModel follows real IsoGameCharacter better than SurvivorDesc alone.
+local function getLiveResidentForPortrait(slotIndex, activeSlot)
+    if not slotIndex or slotIndex == activeSlot or not WeNPC or not WeNPC.Cache then
+        return nil
+    end
+    local c = WeNPC.Cache[slotIndex]
+    if not c or c == "pending" then
+        return nil
+    end
+    if not instanceof(c, "IsoGameCharacter") then
+        return nil
+    end
+    if c.isDead and c:isDead() then
+        return nil
+    end
+    return c
+end
+
 -- ─── WeRosterPanel ────────────────────────────────────────────────────────────
 -- Shows only used character slots + one empty "Create" row, up to MAX_SLOTS.
 -- When the list is taller than the visible area a scrollbar appears.
@@ -42,6 +64,10 @@ function WeRosterPanel:new(x, y, w, h)
     local o = ISPanel.new(self, x, y, w, h)
     o.backgroundColor = {r=0.08, g=0.08, b=0.12, a=0.94}
     return o
+end
+
+function WeRosterPanel:removeFromUIManager()
+    ISPanel.removeFromUIManager(self)
 end
 
 local function getLiveStatsForSlot(slotIndex, slot)
@@ -587,31 +613,52 @@ function WeRosterPanel:updatePortraitForSlot(slotIndex)
             return
         end
     elseif self.portraitPanel and not self._portraitDisabled then
+        local usedLiveNpc = false
+        local npc = getLiveResidentForPortrait(slotIndex, active)
+        if npc and self.portraitPanel.setCharacter then
+            pcall(function() self.portraitPanel:setCharacter(nil) end)
+            local okNpc = pcall(function() self.portraitPanel:setCharacter(npc) end)
+            if okNpc then
+                usedLiveNpc = true
+                if We and We.logAppearance then
+                    We.logAppearance(string.format("portrait inactive liveNPC slot=%s", tostring(slotIndex)))
+                end
+            end
+        end
+
+        if not usedLiveNpc then
         local app = slot.appearance or {}
         local desc = SurvivorFactory.CreateSurvivor()
         desc:setFemale(app.female or false)
 
+        -- Full-body LS fixes wrong face/body on CreateSurvivor() (same idea as LastStandSetup.loadLastStandPlayerVisuals).
         local vis = desc:getHumanVisual()
         if vis then
-            if app.skinTexture and app.skinTexture ~= "" and vis.setSkinTextureName then
-                vis:setSkinTextureName(app.skinTexture)
+            local hvOk = false
+            if app.humanVisualLS and type(app.humanVisualLS) == "string" and app.humanVisualLS ~= "" and vis.loadLastStandString then
+                hvOk = select(1, pcall(function() vis:loadLastStandString(app.humanVisualLS) end))
             end
-            if app.hairStyle and vis.setHairModel then
-                vis:setHairModel(app.hairStyle)
-            end
-            if app.hairColor and vis.setHairColor then
-                vis:setHairColor(ImmutableColor.new(app.hairColor.r, app.hairColor.g, app.hairColor.b, 1))
-            end
-            if app.beardStyle and vis.setBeardModel then
-                vis:setBeardModel(app.beardStyle)
-            end
-            if app.beardColor and vis.setBeardColor then
-                vis:setBeardColor(ImmutableColor.new(app.beardColor.r, app.beardColor.g, app.beardColor.b, 1))
+            if not hvOk then
+                if app.skinTexture and app.skinTexture ~= "" and vis.setSkinTextureName then
+                    vis:setSkinTextureName(app.skinTexture)
+                end
+                if app.hairStyle and vis.setHairModel then
+                    vis:setHairModel(app.hairStyle)
+                end
+                if app.hairColor and vis.setHairColor then
+                    vis:setHairColor(ImmutableColor.new(app.hairColor.r, app.hairColor.g, app.hairColor.b, 1))
+                end
+                if app.beardStyle and vis.setBeardModel then
+                    vis:setBeardModel(app.beardStyle)
+                end
+                if app.beardColor and vis.setBeardColor then
+                    vis:setBeardColor(ImmutableColor.new(app.beardColor.r, app.beardColor.g, app.beardColor.b, 1))
+                end
             end
         end
-        -- Restore saved worn clothes from slot inventory so portrait uses actual outfit.
-        -- Slot saves use fullType+wornLoc (not only lastStandStr); without this the inactive portrait is naked.
-        if desc.getWornItems and desc.setWornItem and slot.inventory then
+
+        -- Worn clothes: merge inventory rows with appearance.clothingVisuals by fullType when lastStandStr is missing.
+        if desc.getWornItems and desc.setWornItem then
             local function portraitWearSortKey(locStr)
                 local l = tostring(locStr or "")
                 if l == "Back" then return 950 end
@@ -632,12 +679,22 @@ function WeRosterPanel:updatePortraitForSlot(slotIndex)
                 if itemData.wornLoc and tostring(itemData.wornLoc) ~= "" then
                     return tostring(itemData.wornLoc)
                 end
-                if itemData.lastStandStr and ItemVisual.createLastStandItem then
-                    local it = ItemVisual.createLastStandItem(itemData.lastStandStr)
-                    if it and it.getBodyLocation then
-                        local ok, loc = pcall(function() return it:getBodyLocation() end)
-                        if ok and loc then return tostring(loc) end
+                if itemData.lastStandStr and ItemVisual and ItemVisual.createLastStandItem then
+                    local ok, it = pcall(function() return ItemVisual.createLastStandItem(itemData.lastStandStr) end)
+                    if ok and it and it.getBodyLocation then
+                        local ok2, loc = pcall(function() return it:getBodyLocation() end)
+                        if ok2 and loc then return tostring(loc) end
                     end
+                end
+                return ""
+            end
+
+            local function inferSortLocFromLsString(ls)
+                if not ls or not ItemVisual or not ItemVisual.createLastStandItem then return "" end
+                local ok, it = pcall(function() return ItemVisual.createLastStandItem(ls) end)
+                if ok and it and it.getBodyLocation then
+                    local ok2, loc = pcall(function() return it:getBodyLocation() end)
+                    if ok2 and loc then return tostring(loc) end
                 end
                 return ""
             end
@@ -664,68 +721,148 @@ function WeRosterPanel:updatePortraitForSlot(slotIndex)
                 return s
             end
 
+            local function applyWornItemToDesc(item)
+                if not item then return end
+                local loc = item.getBodyLocation and item:getBodyLocation()
+                if not loc or loc == "" then return end
+                local bodyLoc = resolveDescBodyLoc(loc, item)
+                if bodyLoc then
+                    pcall(function() desc:setWornItem(bodyLoc, item) end)
+                end
+            end
+
             local worn = desc:getWornItems()
             if worn and worn.clear then worn:clear() end
 
-            local rows = {}
-            for _, itemData in ipairs(slot.inventory) do
-                local wl = itemData.wornLoc
-                local hasWl = wl ~= nil and tostring(wl) ~= ""
-                if itemData.lastStandStr or (itemData.fullType and hasWl) then
-                    rows[#rows + 1] = itemData
-                end
-            end
-            table.sort(rows, function(a, b)
-                return portraitWearSortKey(inferSortLocStr(a)) < portraitWearSortKey(inferSortLocStr(b))
-            end)
-
-            for _, itemData in ipairs(rows) do
-                if itemData.lastStandStr and ItemVisual.createLastStandItem then
-                    local item = ItemVisual.createLastStandItem(itemData.lastStandStr)
-                    if item then
-                        local loc = item.getBodyLocation and item:getBodyLocation()
-                        if loc and loc ~= "" then
-                            local bodyLoc = resolveDescBodyLoc(loc, item)
-                            if bodyLoc then
-                                pcall(function() desc:setWornItem(bodyLoc, item) end)
+            local lsByFullType = {}
+            if type(app.clothingVisuals) == "table" then
+                for _, ls in ipairs(app.clothingVisuals) do
+                    if type(ls) == "string" and ls ~= "" and ItemVisual and ItemVisual.createLastStandItem then
+                        local ok, it = pcall(function() return ItemVisual.createLastStandItem(ls) end)
+                        if ok and it and it.getFullType then
+                            local okf, ft = pcall(function() return it:getFullType() end)
+                            if okf and type(ft) == "string" and ft ~= "" and not lsByFullType[ft] then
+                                lsByFullType[ft] = ls
                             end
                         end
                     end
-                elseif itemData.fullType and itemData.wornLoc and tostring(itemData.wornLoc) ~= "" then
-                    local item = instanceItem(itemData.fullType)
-                    if item then
-                        if item.setCondition and itemData.condition ~= nil then
+                end
+            end
+
+            local wornRows = {}
+            for _, itemData in ipairs(slot.inventory or {}) do
+                local wl = itemData.wornLoc
+                local hasWl = wl ~= nil and tostring(wl) ~= ""
+                if itemData.lastStandStr or (itemData.fullType and hasWl) then
+                    wornRows[#wornRows + 1] = itemData
+                end
+            end
+
+            local nLsMap = 0
+            for _ in pairs(lsByFullType) do
+                nLsMap = nLsMap + 1
+            end
+            local invRows = #(slot.inventory or {})
+            local nLsInv = 0
+            for _, r in ipairs(slot.inventory or {}) do
+                if r and r.lastStandStr and r.lastStandStr ~= "" then nLsInv = nLsInv + 1 end
+            end
+            if We and We.logAppearance then
+                We.logAppearance(string.format(
+                    "portrait inactive slot=%s invRows=%d wornRows=%d clothingVisuals=%d lsMapByFullType=%d invRowsWithLS=%d humanVisualLS=%s",
+                    tostring(slotIndex),
+                    invRows,
+                    #wornRows,
+                    type(app.clothingVisuals) == "table" and #app.clothingVisuals or 0,
+                    nLsMap,
+                    nLsInv,
+                    (app.humanVisualLS and type(app.humanVisualLS) == "string" and #app.humanVisualLS > 0) and ("yes,len=" .. tostring(#app.humanVisualLS)) or "no"
+                ))
+            end
+
+            if #wornRows > 0 then
+                local wearDbgLeft = 10
+                table.sort(wornRows, function(a, b)
+                    return portraitWearSortKey(inferSortLocStr(a)) < portraitWearSortKey(inferSortLocStr(b))
+                end)
+                for _, itemData in ipairs(wornRows) do
+                    local ls = itemData.lastStandStr
+                    local fromMap = false
+                    if (not ls or ls == "") and itemData.fullType then
+                        ls = lsByFullType[itemData.fullType]
+                        fromMap = ls ~= nil
+                    end
+                    local item = nil
+                    if ls and ItemVisual and ItemVisual.createLastStandItem then
+                        local okLs, it = pcall(function() return ItemVisual.createLastStandItem(ls) end)
+                        if okLs then item = it end
+                    end
+                    if not item and itemData.fullType and itemData.wornLoc and tostring(itemData.wornLoc) ~= "" then
+                        item = instanceItem(itemData.fullType)
+                        if item and item.setCondition and itemData.condition ~= nil then
                             pcall(item.setCondition, item, tonumber(itemData.condition) or 100)
                         end
-                        local bodyLoc = resolveDescBodyLoc(itemData.wornLoc, item)
-                        if bodyLoc then
-                            pcall(function() desc:setWornItem(bodyLoc, item) end)
-                        end
+                    end
+                    if We and We.logAppearance and wearDbgLeft > 0 then
+                        wearDbgLeft = wearDbgLeft - 1
+                        We.logAppearance(string.format(
+                            "portrait wear: ft=%s loc=%s ls=%s fromMap=%s item=%s",
+                            tostring(itemData.fullType),
+                            tostring(itemData.wornLoc),
+                            ls and "yes" or "no",
+                            tostring(fromMap),
+                            item and "ok" or "nil"
+                        ))
+                    end
+                    applyWornItemToDesc(item)
+                end
+            elseif type(app.clothingVisuals) == "table" and #app.clothingVisuals > 0 then
+                local lsOnly = {}
+                for _, ls in ipairs(app.clothingVisuals) do
+                    if type(ls) == "string" and ls ~= "" then
+                        lsOnly[#lsOnly + 1] = ls
+                    end
+                end
+                table.sort(lsOnly, function(a, b)
+                    return portraitWearSortKey(inferSortLocFromLsString(a))
+                        < portraitWearSortKey(inferSortLocFromLsString(b))
+                end)
+                for _, ls in ipairs(lsOnly) do
+                    if ItemVisual and ItemVisual.createLastStandItem then
+                        local ok, item = pcall(function() return ItemVisual.createLastStandItem(ls) end)
+                        if ok and item then applyWornItemToDesc(item) end
                     end
                 end
             end
         end
 
+        local attachRows = (WeNPC and WeNPC.collectHotbarAttachRows) and WeNPC.collectHotbarAttachRows(slot.inventory) or {}
+
+        pcall(function() self.portraitPanel:setCharacter(nil) end)
+
+        local attOk, attWhy = false, "none"
+        if #attachRows > 0 and WeNPC and WeNPC.applyAttachmentsToDescForPreview then
+            attOk, attWhy = WeNPC.applyAttachmentsToDescForPreview(desc, attachRows)
+        end
+        if We and We.logAppearance then
+            We.logAppearance(string.format(
+                "portrait inactive setSurvivorDesc slot=%s attachRows=%d descAttachPreview=%s %s",
+                tostring(slotIndex),
+                #attachRows,
+                tostring(attOk),
+                tostring(attWhy)
+            ))
+        end
+
         local okSet = pcall(self.portraitPanel.setSurvivorDesc, self.portraitPanel, desc)
+
         if not okSet then
             self._portraitDisabled = true
             self.portraitPanel:setVisible(false)
-            print("[We] portrait disabled: setSurvivorDesc failed")
+            print("[We] portrait disabled: setSurvivorDesc/setCharacter failed")
             return
         end
-        -- Only fallback when snapshot has no wearable rows (fullType+wornLoc or lastStandStr).
-        local hasWornForPortrait = false
-        if slot.inventory then
-            for _, invRow in ipairs(slot.inventory) do
-                local wl = invRow.wornLoc
-                if invRow.lastStandStr or (invRow.fullType and wl ~= nil and tostring(wl) ~= "") then
-                    hasWornForPortrait = true
-                    break
-                end
-            end
-        end
-        if self.portraitPanel.setOutfitName and not hasWornForPortrait then
-            self.portraitPanel:setOutfitName("Foreman", false, false)
+        -- Do NOT call setOutfitName("Foreman") here: it resets the preview to a clean default outfit.
         end
     end
     if self.portraitPanel and self.portraitPanel.setZoom then self.portraitPanel:setZoom(14) end

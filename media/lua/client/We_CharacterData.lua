@@ -540,6 +540,15 @@ local function serializeItemForSlot(item, depth)
         if oku and u then uses = u end
     end
     local row = { fullType = ft, condition = cond, uses = uses }
+    if item.getVisual then
+        local okv, v = pcall(function() return item:getVisual() end)
+        if okv and v and v.getLastStandString then
+            local oks, ls = pcall(function() return v:getLastStandString() end)
+            if oks and type(ls) == "string" and ls ~= "" then
+                row.lastStandStr = ls
+            end
+        end
+    end
     local inv = item.getInventory and item:getInventory()
     if inv and inv.getItems then
         local list = inv:getItems()
@@ -558,8 +567,54 @@ local function serializeItemForSlot(item, depth)
     return row
 end
 
+-- When getVisual():getLastStandString() failed during serializeItemForSlot, rows still lack lastStandStr.
+-- captureAppearance().clothingVisuals has full per-piece state; map by fullType and patch inventory for NPC/portrait.
+local function patchInventoryLastStandFromClothingVisuals(inv, clothingVisuals)
+    if not inv or type(clothingVisuals) ~= "table" or #clothingVisuals == 0 then return end
+    if not ItemVisual or not ItemVisual.createLastStandItem then return end
+    local byFt = {}
+    for _, ls in ipairs(clothingVisuals) do
+        if type(ls) == "string" and ls ~= "" then
+            local ok, it = pcall(function() return ItemVisual.createLastStandItem(ls) end)
+            if ok and it and it.getFullType then
+                local okf, ft = pcall(function() return it:getFullType() end)
+                if okf and type(ft) == "string" and ft ~= "" and not byFt[ft] then
+                    byFt[ft] = ls
+                end
+            end
+        end
+    end
+    -- Kahlua may not expose global `next`; avoid next(byFt).
+    local hasMap = false
+    for _ in pairs(byFt) do
+        hasMap = true
+        break
+    end
+    if not hasMap then return end
+    local patched = 0
+    for _, row in ipairs(inv) do
+        if row and type(row.fullType) == "string" and row.fullType ~= "" and not row.lastStandStr then
+            local ls = byFt[row.fullType]
+            if ls then
+                row.lastStandStr = ls
+                patched = patched + 1
+            end
+        end
+    end
+    if patched > 0 and We and We.logAppearance then
+        We.logAppearance("saveSlot patchInventoryLastStandFromClothingVisuals: patched " .. tostring(patched) .. " rows (LS from clothingVisuals by fullType)")
+    end
+end
+
 local function addItemFromSlotData(parentInv, itemData)
     if not parentInv or not itemData or not itemData.fullType then return nil end
+    if itemData.lastStandStr and ItemVisual and ItemVisual.createLastStandItem then
+        local ok, item = pcall(function() return ItemVisual.createLastStandItem(itemData.lastStandStr) end)
+        if ok and item then
+            parentInv:AddItem(item)
+            return item
+        end
+    end
     local item = instanceItem(itemData.fullType)
     if not item then return nil end
     if item.setCondition then item:setCondition(tonumber(itemData.condition) or 100) end
@@ -2271,6 +2326,8 @@ function WeData.saveSlot(index)
         slot.appearance.clothingVisuals = prevAppearance.clothingVisuals
         print("[We] saveSlot(" .. tostring(index) .. "): appearance fallback clothes 0 -> " .. tostring(prevAppClothes))
     end
+
+    patchInventoryLastStandFromClothingVisuals(slot.inventory, slot.appearance and slot.appearance.clothingVisuals)
 
     dumpSlot("saveSlot(" .. index .. ")", slot)
 end

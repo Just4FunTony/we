@@ -22,6 +22,15 @@ local function applyHotbarAttachmentsFromRows(zombie, rows)
                 end
             end
             if not item then
+                if row.lastStandStr and ItemVisual and ItemVisual.createLastStandItem then
+                    local okLs, it = pcall(function() return ItemVisual.createLastStandItem(row.lastStandStr) end)
+                    if okLs and it then
+                        item = it
+                        pcall(inv.AddItem, inv, item)
+                    end
+                end
+            end
+            if not item then
                 item = instanceItem(row.fullType)
                 if item then
                     if item.setCondition and row.condition ~= nil then

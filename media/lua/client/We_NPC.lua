@@ -225,6 +225,7 @@ function WeNPC.collectHotbarAttachRows(inventory)
                 fullType = row.fullType,
                 condition = row.condition,
                 uses = row.uses,
+                lastStandStr = row.lastStandStr,
                 attachedSlot = as,
                 attachedToModel = row.attachedToModel,
                 attachedSlotType = row.attachedSlotType,
@@ -232,6 +233,77 @@ function WeNPC.collectHotbarAttachRows(inventory)
         end
     end
     return out
+end
+
+-- Try to attach hotbar/back items on SurvivorDesc (preview / UI3DModel) without spawning IsoSurvivor.
+-- Returns success, reason: reason explains failure when success is false.
+function WeNPC.applyAttachmentsToDescForPreview(desc, rows)
+    if not desc or not rows or #rows == 0 then
+        return false, "no_desc_or_rows"
+    end
+    local inv = desc.getInventory and desc:getInventory()
+    if not inv or not inv.AddItem then
+        if We and We.logAppearance then
+            We.logAppearance("attachPreview: SurvivorDesc has no usable getInventory() — 3D preview cannot show back/holster items this way")
+        end
+        return false, "no_inventory_on_desc"
+    end
+    if not desc.setAttachedItem then
+        if We and We.logAppearance then
+            We.logAppearance("attachPreview: desc:setAttachedItem missing")
+        end
+        return false, "no_setAttachedItem"
+    end
+    local any = false
+    local failFirst = nil
+    for _, row in ipairs(rows) do
+        local mdl = row.attachedToModel
+        local as = tonumber(row.attachedSlot)
+        if row.fullType and mdl and mdl ~= "" and as and as > -1 then
+            local item = nil
+            if row.lastStandStr and ItemVisual and ItemVisual.createLastStandItem then
+                local ok, it = pcall(function() return ItemVisual.createLastStandItem(row.lastStandStr) end)
+                if ok and it then item = it end
+            end
+            if not item then
+                item = instanceItem(row.fullType)
+                if item then
+                    if item.setCondition and row.condition ~= nil then
+                        pcall(item.setCondition, item, tonumber(row.condition) or 100)
+                    end
+                    if item.setUsedDelta and row.uses ~= nil then
+                        pcall(item.setUsedDelta, item, row.uses)
+                    end
+                end
+            end
+            if item then
+                pcall(inv.AddItem, inv, item)
+                local okAtt, errAtt = pcall(function() return desc:setAttachedItem(mdl, item) end)
+                if okAtt then
+                    any = true
+                    if We and We.logAppearance then
+                        We.logAppearance("attachPreview: OK model=" .. tostring(mdl) .. " ft=" .. tostring(row.fullType))
+                    end
+                    if item.setAttachedSlot then pcall(item.setAttachedSlot, item, as) end
+                    if item.setAttachedSlotType and row.attachedSlotType then
+                        pcall(item.setAttachedSlotType, item, row.attachedSlotType)
+                    end
+                    if item.setAttachedToModel then pcall(item.setAttachedToModel, item, mdl) end
+                else
+                    if not failFirst then
+                        failFirst = tostring(mdl) .. ":" .. tostring(errAtt)
+                    end
+                    if We and We.logAppearance then
+                        We.logAppearance("attachPreview: setAttachedItem failed model=" .. tostring(mdl) .. " err=" .. tostring(errAtt))
+                    end
+                end
+            end
+        end
+    end
+    if any then
+        return true, "ok"
+    end
+    return false, failFirst or "all_attach_failed"
 end
 
 -- Re-attach after clearZombieAttachments (every tick) — find existing inv item or instance once.
@@ -252,6 +324,15 @@ function WeNPC.applyHotbarAttachmentsFromRows(char, rows)
                 if it and it.getFullType and it:getFullType() == row.fullType then
                     item = it
                     break
+                end
+            end
+            if not item then
+                if row.lastStandStr and ItemVisual and ItemVisual.createLastStandItem then
+                    local okLs, it = pcall(function() return ItemVisual.createLastStandItem(row.lastStandStr) end)
+                    if okLs and it then
+                        item = it
+                        pcall(inv.AddItem, inv, item)
+                    end
                 end
             end
             if not item then
@@ -282,14 +363,80 @@ end
 
 -- ─── Brain builder ─────────────────────────────────────────────────────────────
 
+-- Same layer order as wear reapply / portrait (matches We_CharacterData.bodyLocationWearSortKey).
+local function brainWearSortKey(locStr)
+    local l = tostring(locStr or "")
+    if l == "Back" then return 950 end
+    if l:find("Holster", 1, true) then return 880 end
+    if l == "Belt" or l:find("Belt", 1, true) then return 860 end
+    if l:find("Jacket", 1, true) then return 780 end
+    if l:find("Sweater", 1, true) then return 760 end
+    if l == "Torso" or l == "ShortSleeveShirt" or l == "Tshirt" or l == "TankTop" then return 720 end
+    if l:find("Dress", 1, true) or l:find("FullSuit", 1, true) then return 710 end
+    if l == "Pants" or l == "Skirt" then return 400 end
+    if l == "Shoes" then return 350 end
+    if l == "Socks" then return 320 end
+    if l:find("Underwear", 1, true) then return 280 end
+    return 500
+end
+
+local function inferBrainLocStr(itemData)
+    if itemData.wornLoc and tostring(itemData.wornLoc) ~= "" then
+        return tostring(itemData.wornLoc)
+    end
+    if itemData.lastStandStr and ItemVisual and ItemVisual.createLastStandItem then
+        local it = ItemVisual.createLastStandItem(itemData.lastStandStr)
+        if it and it.getBodyLocation then
+            local ok, loc = pcall(function() return it:getBodyLocation() end)
+            if ok and loc then return tostring(loc) end
+        end
+    end
+    return ""
+end
+
 function WeNPC.buildBrain(slot, slotIndex)
     local app = WeNPC.shallowAppearanceForBrain(slot.appearance)
-    -- If appearance snapshot missed clothing visuals, recover from serialized slot inventory.
-    if app and (not app.clothingVisuals or #app.clothingVisuals == 0) and slot and slot.inventory then
-        app.clothingVisuals = app.clothingVisuals or {}
+    -- Merge worn inventory with appearance.clothingVisuals by fullType when rows lack lastStandStr.
+    if app and slot and slot.inventory then
+        local byFt = {}
+        local cv = slot.appearance and slot.appearance.clothingVisuals
+        if type(cv) == "table" and ItemVisual and ItemVisual.createLastStandItem then
+            for _, ls in ipairs(cv) do
+                if type(ls) == "string" and ls ~= "" then
+                    local ok, it = pcall(function() return ItemVisual.createLastStandItem(ls) end)
+                    if ok and it and it.getFullType then
+                        local okf, ft = pcall(function() return it:getFullType() end)
+                        if okf and type(ft) == "string" and ft ~= "" and not byFt[ft] then
+                            byFt[ft] = ls
+                        end
+                    end
+                end
+            end
+        end
+        local merged = {}
         for _, itemData in ipairs(slot.inventory) do
-            if itemData and itemData.lastStandStr then
-                app.clothingVisuals[#app.clothingVisuals + 1] = itemData.lastStandStr
+            if itemData then
+                local wl = itemData.wornLoc
+                local hasWl = wl ~= nil and tostring(wl) ~= ""
+                if itemData.lastStandStr or (itemData.fullType and hasWl) then
+                    local ls = itemData.lastStandStr
+                    if (not ls or ls == "") and itemData.fullType then
+                        ls = byFt[itemData.fullType]
+                    end
+                    if type(ls) == "string" and ls ~= "" then
+                        merged[#merged + 1] = { ls = ls, wornLoc = itemData.wornLoc }
+                    end
+                end
+            end
+        end
+        if #merged > 0 then
+            table.sort(merged, function(a, b)
+                return brainWearSortKey(inferBrainLocStr({ lastStandStr = a.ls, wornLoc = a.wornLoc }))
+                    < brainWearSortKey(inferBrainLocStr({ lastStandStr = b.ls, wornLoc = b.wornLoc }))
+            end)
+            app.clothingVisuals = {}
+            for _, m in ipairs(merged) do
+                app.clothingVisuals[#app.clothingVisuals + 1] = m.ls
             end
         end
     end

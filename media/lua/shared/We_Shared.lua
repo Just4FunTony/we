@@ -6,6 +6,15 @@ We.MAX_SLOTS    = 16
 We.MOD_DATA_KEY = "We_Characters"
 We.HOME_SWITCH_RADIUS = 30   -- tiles radius around the custom home point
 
+-- Set false to silence [We][Appearance] debug lines (portrait/NPC clothing + attach preview).
+We.DEBUG_APPEARANCE = true
+
+function We.logAppearance(msg)
+    if We.DEBUG_APPEARANCE then
+        print("[We][Appearance] " .. tostring(msg))
+    end
+end
+
 -- Stat keys for save/load, paired with CharacterStat enum values (B42 API)
 We.STATS_KEYS = {
     "Hunger", "Thirst", "Fatigue", "Endurance", "Boredom",
